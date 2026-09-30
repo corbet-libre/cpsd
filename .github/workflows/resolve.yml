@@ -1,0 +1,22 @@
+name: Resolve dependency locks
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: stable
+      - run: cargo metadata --format-version 1 > /dev/null
+      - run: cargo metadata --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: resolved-locks
+          path: |
+            Cargo.lock
+            fuzz/Cargo.lock

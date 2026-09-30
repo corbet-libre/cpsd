@@ -1,0 +1,25 @@
+# Audit the complete native and browser graph, including unused Dock dependencies.
+[advisories]
+# Exact advisories only; the reviewed versions and exposure are checked in CI.
+# See docs/DEPENDENCIES.md. Remote TLS name-constraint risks remain open.
+ignore = [
+    { id = "RUSTSEC-2024-0388", reason = "Dock/arkworks uses derivative 2.2.0 at build time; no compatible maintained upstream replacement yet" },
+    { id = "RUSTSEC-2024-0436", reason = "Dock/arkworks uses paste 1.0.15 at build time; replacement requires upstream family upgrade" },
+    { id = "RUSTSEC-2026-0173", reason = "Wasmer 6.1.0 uses proc-macro-error2 2.0.1 at build time; unused runtime, tracked Dock feature-isolation task" },
+    { id = "RUSTSEC-2025-0134", reason = "libSQL native-root loader uses rustls-pemfile 2.2.0; thin wrapper over rustls-pki-types, upstream transport migration pending" },
+    { id = "RUSTSEC-2026-0258", reason = "libSQL 0.9.30 built-in connector enables HTTP/1 only; crlt exposes no custom connector, source guard in CI" },
+    { id = "RUSTSEC-2026-0049", reason = "libSQL 0.9.30 default TLS connector configures no CRLs; tracked transport upgrade" },
+    { id = "RUSTSEC-2026-0104", reason = "libSQL 0.9.30 default TLS connector configures no CRLs; tracked transport upgrade" },
+    { id = "RUSTSEC-2026-0098", reason = "OPEN remote TLS name-constraint risk requiring CA misissuance; libSQL 0.9.30 still pins rustls 0.22/webpki 0.102 with no compatible patch" },
+    { id = "RUSTSEC-2026-0099", reason = "OPEN remote TLS wildcard/name-constraint risk requiring CA misissuance; fixed webpki 0.103 is outside libSQL transport compatibility" },
+    { id = "RUSTSEC-2025-0055", reason = "ark-relations 0.4 uses tracing-subscriber 0.2 for constraint tracing; cpsd never installs a subscriber or logs requests" },
+]
+
+[licenses]
+allow = [
+    "0BSD", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause",
+    "BSD-3-Clause", "BSL-1.0", "CC0-1.0", "CDLA-Permissive-2.0", "ISC",
+    "MIT", "NCSA", "Unicode-3.0", "Unlicense", "Zlib",
+    "LGPL-3.0-only WITH LGPL-3.0-linking-exception",
+]
+confidence-threshold = 0.8

@@ -1,4 +1,62 @@
 //! Pseudonyms: blind credential issuance and unlinkable per-community pseudonyms.
 //!
-//! See the README for scope; the contract lives in the cmtymeet architecture notes.
+//! `cpsd` is a thin facade over docknetwork's
+//! [`crypto`](https://github.com/docknetwork/crypto) crates (`bbs_plus`,
+//! `proof_system`, `bulletproofs_plus_plus`) for the `cvld` passport:
+//!
+//! - **Blind issuance.** The holder commits to a random secret
+//!   ([`HolderSecret`]) and proves knowledge of it ([`request_issue`]); the
+//!   issuer ([`IssuerKey::issue_blind`]) signs a BBS+ credential over the
+//!   committed secret plus attributes it knows (passed global gates with
+//!   expiries, valid-until, policy epoch, key ID) without learning the secret;
+//!   the holder unblinds it ([`PendingIssuance::finish`]) into a [`Passport`].
+//! - **Per-community pseudonyms.** `pseudonym = secret * H(community)` in G1
+//!   ([`Pseudonym`]): deterministic per holder and community, unlinkable across
+//!   communities (DDH in G1).
+//! - **Presentation.** [`present`] proves in zero knowledge: a valid passport
+//!   signed by key K, the requested gates present and unexpired, the requested
+//!   policy epoch, and that the pseudonym derives from the signed secret; bound
+//!   to the verifier's [`PresentationRequest`] (community, time, challenge).
+//!   [`verify`] checks it and returns the pseudonym.
+//! - **Revocation (v1).** Validity period and policy epoch inside the
+//!   passport; see the crate README for the accumulator extension point (v2).
+//!
+//! Randomness is always supplied by the caller (`RngCore + CryptoRng`, the
+//! `rand` 0.8 traits re-exported as [`rand`]); in a browser seed a CSPRNG from
+//! `crypto.getRandomValues`.
+//!
+//! See `docs/CONTRACT.md` for the contract and the README for the design.
 #![forbid(unsafe_code)]
+
+mod attributes;
+mod authentication;
+mod error;
+mod holder;
+mod ids;
+mod issuer;
+mod params;
+mod presentation;
+mod proof_wire;
+mod session;
+pub mod storage;
+mod wire;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod test_support;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests;
+
+pub use ark_std::rand;
+
+pub use attributes::{MAX_GATES, PassportAttributes, TIME_LIMIT, Timestamp};
+pub use authentication::{AuthenticatedCommunity, AuthenticatedIssuance};
+pub use error::Error;
+pub use holder::{HolderSecret, Passport, PendingIssuance, request_issue};
+pub use ids::{CommunityId, GateId, KeyId, MAX_COMMUNITY_ID_LEN, MAX_ID_LEN};
+pub use issuer::{
+    BlindPassport, IssuanceChallenge, IssuanceRequest, IssuerKey, IssuerPublicKey, IssuerTag,
+};
+pub use presentation::{Presentation, PresentationRequest, Pseudonym, present, verify};
+
+pub use session::{Verifier, issuance_challenge, issue_blind_once};
+pub use storage::{ChallengeRecord, ChallengeStore, IssuanceStore, MemoryStore, VerifiedIssuance};
