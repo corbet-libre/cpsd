@@ -33,28 +33,21 @@ crate or suppress the audit step to get a green build. GitHub Actions are pinned
 by full commit SHA while the Rust toolchain follows stable. Dependency locks
 record the tested graph; refreshes require native, browser and fuzz validation.
 
-## Reviewed advisory exceptions (2026-09-30)
+## Reviewed advisory exceptions (2026-10-01)
 
-The first audit exposed ten existing transitive advisories. These are explicit
-exceptions, **not fixed vulnerabilities**. Current published libSQL 0.9.30 and
-its upstream main still use hyper 0.14 and hyper-rustls 0.25; crlt main uses the
-same client. Swapping to a prerelease does not repair this chain. No crypto or
-TLS implementation is locally forked. Review these exceptions on every upstream
-change and before deployment; a green CI audit means the documented policy
-passed, not that the resolved graph is advisory-free.
+The pinned crlt uses maintained reqwest/rustls for remote transport. libSQL's
+legacy remote connector is disabled. All six old transport exceptions were
+removed; CI rejects their vulnerable dependency families.
+
+Four unrelated Dock/arkworks exceptions remain, each tied to its reviewed
+locked version by the CI source guard:
 
 | Advisory | Dependency and exposure / follow-up |
 |---|---|
-| [RUSTSEC-2024-0388](https://rustsec.org/advisories/RUSTSEC-2024-0388.html) | `derivative` 2.2.0, unmaintained build-time macro in Dock/arkworks. Replace through an upstream family migration. |
-| [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436.html) | `paste` 1.0.15, unmaintained build-time macro in Dock/arkworks. Same follow-up. |
-| [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173.html) | `proc-macro-error2` 2.0.1, unmaintained Wasmer derive dependency. Remove with unused Dock protocol dependencies when upstream supports it. |
-| [RUSTSEC-2025-0134](https://rustsec.org/advisories/RUSTSEC-2025-0134.html) | `rustls-pemfile` 2.2.0, unmaintained native-root loader wrapper over rustls-pki-types. Await libSQL transport migration. |
-| [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258.html) | `h2` 0.3.27 unbounded empty frames. The reviewed libSQL connector enables only HTTP/1; crlt does not expose a custom connector. The unused HTTP/2 implementation remains compiled. CI checks the reviewed connector source. |
-| [RUSTSEC-2026-0049](https://rustsec.org/advisories/RUSTSEC-2026-0049.html), [RUSTSEC-2026-0104](https://rustsec.org/advisories/RUSTSEC-2026-0104.html) | `rustls-webpki` 0.102.8 CRL matching/parsing. The default libSQL TLS client does not configure CRLs. These exceptions do not cover callers with custom CRL use. |
-| [RUSTSEC-2026-0098](https://rustsec.org/advisories/RUSTSEC-2026-0098.html), [RUSTSEC-2026-0099](https://rustsec.org/advisories/RUSTSEC-2026-0099.html) | **Open remote TLS risk:** webpki 0.102.8 mishandles URI/wildcard name constraints after a CA misissues a certificate. Fixed webpki 0.103 versions are incompatible with this libSQL dependency chain. Local-file storage is unaffected; configuring a trusted Turso endpoint does not eliminate CA misissuance risk. Upgrade through crlt/libSQL when a compatible maintained transport is available. |
-| [RUSTSEC-2025-0055](https://rustsec.org/advisories/RUSTSEC-2025-0055.html) | `tracing-subscriber` 0.2.25 via ark-relations constraint tracing. cpsd installs no tracing subscriber and emits no request logs. Consumers must not enable an old logging subscriber on untrusted data. |
+| RUSTSEC-2024-0388 | derivative 2.2.0: unmaintained build-time macro; requires an upstream family migration. |
+| RUSTSEC-2024-0436 | paste 1.0.15: unmaintained build-time macro; same upstream follow-up. |
+| RUSTSEC-2026-0173 | proc-macro-error2 2.0.1: unmaintained Wasmer derive dependency; remove through upstream feature isolation. |
+| RUSTSEC-2025-0055 | tracing-subscriber 0.2.25: ark-relations constraint tracing; cpsd installs no subscriber or request logging. Consumers must not install this old subscriber on untrusted data. |
 
-The CI source guard ties these assessments to exact locked versions and the
-published libSQL connector implementation. Other advisories continue to fail
-the audit, including new advisories for these same crates. The two TLS
-name-constraint exceptions remain residual risks; they are not claimed unreachable.
+Other advisories fail cargo-deny, including new advisories in these packages.
+These exceptions are not a claim that the entire graph is advisory-free.
