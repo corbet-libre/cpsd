@@ -21,9 +21,9 @@ fn deterministic_identity_has_no_dependency_on_issuance_randomness() {
     assert_ne!(first.pseudonym(&community), first.pseudonym(&other));
     assert_ne!(first.pseudonym(&community), different.pseudonym(&community));
     assert!(first.attributes().is_none());
-    println!(
-        "opaque-holder-v1 community-a {}",
-        first.pseudonym(&community).to_hex()
+    assert_eq!(
+        first.pseudonym(&community).to_hex(),
+        "97322b8893bb653c820feb6b9915315da5e5f7716e15ad1ac521b18643b695dcb3a24b42ae422847f63d03efb782af60"
     );
 }
 
@@ -39,8 +39,9 @@ fn opaque_issuance_and_refused_renewal_preserve_the_verified_identity() {
     let mut holder = OpaqueHolder::from_seed(&mut [7; 32]);
     let community = CommunityId::new(b"community-a").unwrap();
     let nym = holder.pseudonym(&community);
-    let attributes = PassportAttributes::new(2000, 7).with_gate(gate.clone(), 1500);
-    let request = PresentationRequest::new(&mut rng, community.clone(), 7, [gate], 1000).unwrap();
+    let attributes = PassportAttributes::new(2000, 7).with_gate(gate.clone(), 2000);
+    let request =
+        PresentationRequest::for_epoch(&mut rng, community.clone(), 7, [gate], 1000, 2000).unwrap();
     let mut signer = csgn::Signer::new(
         "cmty:test",
         csgn::SecretKey::from_seed(&mut [4; 32]),
@@ -49,7 +50,12 @@ fn opaque_issuance_and_refused_renewal_preserve_the_verified_identity() {
     )
     .unwrap();
     let signed = signer
-        .sign(csgn::Kind::Credential, &request.to_bytes(), 0, 1100)
+        .sign(
+            csgn::Kind::Credential,
+            &request.to_bytes(),
+            0,
+            request.now() + 1,
+        )
         .unwrap();
     let expected = AuthenticatedCommunity::from_authenticated_origin(
         community.clone(),

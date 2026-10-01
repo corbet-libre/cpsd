@@ -21,22 +21,29 @@ jobs:
       with:
         toolchain: stable
     - name: Resolve one fresh dependency snapshot
-      run: |-
-        cargo update
+      run: 'cargo update
+
         cargo update --manifest-path fuzz/Cargo.toml
+
         rustc --version > resolver.txt
+
         cargo --version >> resolver.txt
+
         date -u +%FT%TZ >> resolver.txt
+
         sha256sum Cargo.lock fuzz/Cargo.lock > resolved-lock.sha256
-        cat resolved-lock.sha256 >> resolver.txt
+
+        cat resolved-lock.sha256 >> resolver.txt'
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: resolved-lock
-        path: |-
-          Cargo.lock
+        path: 'Cargo.lock
+
           fuzz/Cargo.lock
+
           resolver.txt
-          resolved-lock.sha256
+
+          resolved-lock.sha256'
         retention-days: 7
   check:
     runs-on: ubuntu-latest
@@ -79,22 +86,29 @@ jobs:
         CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
         WASM_BINDGEN_USE_BROWSER: '1'
         WASM_BINDGEN_TEST_TIMEOUT: '120'
-      run: |
-        export CHROMEDRIVER="$(command -v chromedriver)"
+      run: 'export CHROMEDRIVER="$(command -v chromedriver)"
+
         google-chrome --version
+
         cargo test --release --locked --target wasm32-unknown-unknown --test browser --test opaque_holder -- --nocapture
+
+        '
     - name: Dependency license inventory
       if: always()
-      run: |
-        cargo metadata --locked --format-version 1 > dependency-metadata.json
+      run: 'cargo metadata --locked --format-version 1 > dependency-metadata.json
+
         node .github/check-licenses.mjs
+
+        '
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: always()
       with:
         name: cargo-lock
-        path: |
-          Cargo.lock
+        path: 'Cargo.lock
+
           dependency-metadata.json
+
+          '
     needs:
     - resolve
   fuzz:
@@ -127,17 +141,22 @@ jobs:
         name: fuzz-corpus
         path: fuzz/corpus/decode_encode
     - name: Fuzz decode-encode identity
-      run: |
-        cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 > /dev/null
+      run: 'cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 > /dev/null
+
         cargo fuzz run decode_encode --target x86_64-unknown-linux-gnu -- -max_total_time=30 -max_len=262144
+
         sha256sum --check resolved-lock.sha256
+
+        '
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: always()
       with:
         name: fuzz-evidence
-        path: |
-          fuzz/Cargo.lock
+        path: 'fuzz/Cargo.lock
+
           fuzz/artifacts
+
+          '
     if: ${{ always() && needs.resolve.result == 'success' && needs.check.result == 'success' }}
   audit:
     runs-on: ubuntu-latest
@@ -198,15 +217,15 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       with:
         prefix-key: coverage
+        cache-on-failure: true
     - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
       with:
         tool: cargo-llvm-cov
-    - run: |-
-        rustc --version
-        cargo llvm-cov --version
+    - run: 'rustc --version
+
+        cargo llvm-cov --version'
     - name: Measure real native round trips and failure paths
-      run: cargo llvm-cov --locked --workspace --all-features --branch --no-cfg-coverage --no-cfg-coverage-nightly
-        --ignore-filename-regex '/tests/' --json --output-path coverage.json
+      run: cargo llvm-cov --locked --workspace --all-features --branch --no-cfg-coverage --no-cfg-coverage-nightly --ignore-filename-regex '/tests/' --json --output-path coverage.json
     - name: Export exact line and branch locations
       run: cargo llvm-cov report --locked --branch --ignore-filename-regex '/tests/' --lcov --output-path coverage.lcov
     - name: Require complete line and branch coverage
@@ -215,11 +234,13 @@ jobs:
       if: always()
       with:
         name: coverage
-        path: |-
-          coverage.json
+        path: 'coverage.json
+
           coverage.lcov
+
           Cargo.lock
-          resolver.txt
+
+          resolver.txt'
         retention-days: 7
 'on':
   push:

@@ -158,3 +158,14 @@ reconstruction is deterministic; issuance/proof randomness is fresh and separate
 Native and browser tests execute real blind issuance, proof verification,
 restoration equality, wrong-scope/expiry and failed-renewal refusal. Compile-fail
 examples guard the absence of scalar/serialization/cloning accessors.
+
+The v1 public identity vector uses the dedicated holder seed `[7; 32]` and
+community bytes `community-a`. Its canonical compressed pseudonym hex is:
+
+```text
+97322b8893bb653c820feb6b9915315da5e5f7716e15ad1ac521b18643b695dcb3a24b42ae422847f63d03efb782af60
+```
+
+Native and actual browser tests assert this same fixed value before performing
+fresh issuance. The test request uses the existing shared-epoch expiry profile
+and the authenticated request's required exclusive COSE expiry (`now + 1`).
