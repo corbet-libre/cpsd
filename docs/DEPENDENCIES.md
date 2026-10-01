@@ -7,16 +7,16 @@ Upstream: https://github.com/docknetwork/crypto (Apache-2.0).
 `proof_system` still unconditionally includes Circom/LegoGroth16/Wasmer despite
 cpsd never invoking those protocols. This is an open upstream reduction task,
 not a reason to exclude those packages from advisory scanning. The native and
-Wasm backends, and pinned wasm-bindgen/js-sys bridge, stay covered by CI. Before
+Wasm backends, and compatible wasm-bindgen/js-sys bridge ranges, stay covered by CI. Before
 changing this family, review upstream feature isolation, release maintenance,
 proof wire shapes, constant-time claims, browser timings and all adversarial
 proof tests. Removing unused machinery must preserve the exact proof relations;
 do not fork cryptographic primitives locally.
 
-`csgn` main at d7203f310c3c129c3f67ef4ef3e34ccf0ae8c93b provides the required
+`csgn` main provides the required
 canonical COSE request authentication. The library enables verification only;
 volatile signing is test-only. Production services use csgn PersistentSigner.
-`crlt` remains pinned at the previously integrated revision; its scoped
+`crlt` follows main with one resolved revision in the shared lock; its scoped
 transactions support atomic nonce consumption and tag registration without a
 direct libSQL adapter or unfinished cvld dependency.
 
@@ -51,3 +51,14 @@ locked version by the CI source guard:
 
 Other advisories fail cargo-deny, including new advisories in these packages.
 These exceptions are not a claim that the entire graph is advisory-free.
+
+## Browser compatibility investigation
+
+The 2026-10-01 device integration exposed an exact-version conflict between the
+old `js-sys` 0.3.81 pin and current downstream browser tests. Bridge dependencies
+now use [Cargo compatible ranges](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html),
+with a lock-matched runner and actual browser tests. Dock 0.34.0 and its current
+upstream main still require LegoGroth16 0.18.0 with Circom and Wasmer 6; the
+current Wasmer 7 release is outside that dependency's compatible range. Do not
+remove browser validation or fork proof primitives to conceal an upstream
+compiler failure.

@@ -66,12 +66,13 @@ Apache-2.0 alternative, not its optional GPL license.
 cpsd never uses them. We select Wasmer's native backend on native and JavaScript
 backend on Wasm. This is substantial upstream dependency overhead. Our decoder
 only accepts the BBS+/Schnorr/Bulletproofs++ proof variants used here.
-Wasmer 6.1.0 fails against the newer typed JavaScript function and Wasm pointer
-APIs, so the Wasm bridge is pinned to its [upstream lockfile's compatible
-versions](https://github.com/wasmerio/wasmer/blob/v6.1.0/Cargo.lock):
-`wasm-bindgen` 0.2.104 and `js-sys`/`web-sys` 0.3.81. The test runner uses the
-matching version. Review this compatibility constraint when upgrading Dock;
-no Wasmer or cryptographic implementation is forked here.
+Browser bridge dependencies use compatible Cargo version ranges so downstream
+device crates can share one current `wasm-bindgen`/`js-sys` graph. CI refreshes a
+single lockfile and installs the exact matching upstream test runner, checking
+its published checksum before actual Chrome vectors. Historical Wasmer 6.1.0
+compatibility failures with newer typed JavaScript APIs remain an upstream
+integration concern; a successful resolver alone does not establish browser
+compatibility. No Wasmer or cryptographic implementation is forked here.
 
 ## Security decisions
 
