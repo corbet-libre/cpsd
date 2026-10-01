@@ -3,7 +3,7 @@ use crate::*;
 
 pub fn signer(seed: u8) -> csgn::Signer {
     csgn::Signer::new(
-        "cmnt:test",
+        "cmty:test",
         csgn::SecretKey::from_seed(&mut [seed; 32]),
         0,
         TIME_LIMIT,

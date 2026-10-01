@@ -86,7 +86,7 @@ fn decode_point(bytes: &[u8]) -> Result<G1Affine, Error> {
     Ok(p)
 }
 
-/// What a verifier (community level, `cmnt`) asks for, created fresh for every
+/// What a verifier (community level, `cmty`) asks for, created fresh for every
 /// admission attempt.
 ///
 /// The challenge is random; the verifier must store the request, accept at
