@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
         persist-credentials: false
@@ -36,7 +36,7 @@ jobs:
         sha256sum Cargo.lock fuzz/Cargo.lock > resolved-lock.sha256
 
         cat resolved-lock.sha256 >> resolver.txt'
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: resolved-lock
         path: 'Cargo.lock
@@ -51,11 +51,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
         persist-credentials: false
-    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
         name: resolved-lock
     - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
@@ -74,7 +74,7 @@ jobs:
       run: 'cargo fmt --all
 
         git diff --binary > "$RUNNER_TEMP/rustfmt.patch"'
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: failure() && steps.fmt.outcome == 'failure'
       with:
         name: rustfmt-patch
@@ -86,7 +86,7 @@ jobs:
     - run: cargo test --locked -- --nocapture
       env:
         CPSD_FUZZ_CORPUS: fuzz/corpus/decode_encode
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: fuzz-corpus
         path: fuzz/corpus/decode_encode
@@ -113,7 +113,7 @@ jobs:
         node .github/check-licenses.mjs
 
         '
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
         name: cargo-lock
@@ -132,11 +132,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
         persist-credentials: false
-    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
         name: resolved-lock
     - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
@@ -149,7 +149,7 @@ jobs:
     - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
       with:
         tool: cargo-fuzz
-    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
         name: fuzz-corpus
         path: fuzz/corpus/decode_encode
@@ -161,7 +161,7 @@ jobs:
         sha256sum --check resolved-lock.sha256
 
         '
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
         name: fuzz-evidence
@@ -175,11 +175,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
         persist-credentials: false
-    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
         name: resolved-lock
     - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
@@ -199,11 +199,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
         persist-credentials: false
-    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
         name: resolved-lock
     - run: python3 .github/check-first-party.py
@@ -216,11 +216,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
         persist-credentials: false
-    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
         name: resolved-lock
     - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
@@ -247,7 +247,7 @@ jobs:
       run: 'python3 .github/test-source-coverage.py
 
         python3 .github/check-source-coverage.py coverage.lcov coverage.json coverage.txt'
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
         name: coverage
