@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 for (const file of readdirSync('.github/workflows')) {
   const text = readFileSync(`.github/workflows/${file}`, 'utf8');
-  for (const [, action] of text.matchAll(/uses:\s*([^\s#]+)/g)) {
+  for (const [, action] of text.matchAll(/^\s*(?:-\s*)?uses:\s*([^\s#]+)/gm)) {
     assert.match(action, /^[\w-]+\/[\w./-]+@[0-9a-f]{40}$/, `Unpinned action: ${action}`);
   }
 }

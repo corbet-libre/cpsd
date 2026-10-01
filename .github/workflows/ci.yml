@@ -1,126 +1,225 @@
 name: ci
-
-on:
-  push:
-    branches: ["**"]
-  pull_request:
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-
 permissions:
   contents: read
-
 env:
   CARGO_BUILD_JOBS: 2
-
+  CARGO_TERM_COLOR: always
 jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: false
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      with:
+        toolchain: stable
+    - name: Resolve one fresh dependency snapshot
+      run: |-
+        cargo update
+        cargo update --manifest-path fuzz/Cargo.toml
+        rustc --version > resolver.txt
+        cargo --version >> resolver.txt
+        date -u +%FT%TZ >> resolver.txt
+        sha256sum Cargo.lock fuzz/Cargo.lock > resolved-lock.sha256
+        cat resolved-lock.sha256 >> resolver.txt
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: resolved-lock
+        path: |-
+          Cargo.lock
+          fuzz/Cargo.lock
+          resolver.txt
+          resolved-lock.sha256
+        retention-days: 7
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        with:
-          cache-on-failure: true
-      - run: rustc --version
-      - run: cargo fmt --all --check
-      - run: node --test .github/check-pins.test.mjs
-      - run: cargo metadata --locked --format-version 1 > dependency-metadata.json
-      - run: node .github/check-pins.mjs dependency-metadata.json
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked -- --nocapture
-        env:
-          CPSD_FUZZ_CORPUS: fuzz/corpus/decode_encode
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: fuzz-corpus
-          path: fuzz/corpus/decode_encode
-      - run: cargo check --locked --target wasm32-unknown-unknown
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
-        with:
-          tool: wasm-bindgen-cli@0.2.104
-      - name: Browser round trips and timing
-        env:
-          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
-          WASM_BINDGEN_USE_BROWSER: "1"
-          WASM_BINDGEN_TEST_TIMEOUT: "120"
-        run: |
-          export CHROMEDRIVER="$(command -v chromedriver)"
-          google-chrome --version
-          cargo test --release --locked --target wasm32-unknown-unknown --test browser -- --nocapture
-      - name: Dependency license inventory
-        if: always()
-        run: |
-          cargo metadata --locked --format-version 1 > dependency-metadata.json
-          node .github/check-licenses.mjs
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: cargo-lock
-          path: |
-            Cargo.lock
-            dependency-metadata.json
-
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: resolved-lock
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+        targets: wasm32-unknown-unknown
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        cache-on-failure: true
+    - run: rustc --version
+    - run: cargo fmt --all --check
+    - run: node --test .github/check-pins.test.mjs
+    - run: cargo metadata --locked --format-version 1 > dependency-metadata.json
+    - run: node .github/check-pins.mjs dependency-metadata.json
+    - run: cargo clippy --locked --all-targets -- -D warnings
+    - run: cargo test --locked -- --nocapture
+      env:
+        CPSD_FUZZ_CORPUS: fuzz/corpus/decode_encode
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: fuzz-corpus
+        path: fuzz/corpus/decode_encode
+    - run: cargo check --locked --target wasm32-unknown-unknown
+    - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
+      with:
+        tool: wasm-bindgen-cli@0.2.104
+    - name: Browser round trips and timing
+      env:
+        CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+        WASM_BINDGEN_USE_BROWSER: '1'
+        WASM_BINDGEN_TEST_TIMEOUT: '120'
+      run: |
+        export CHROMEDRIVER="$(command -v chromedriver)"
+        google-chrome --version
+        cargo test --release --locked --target wasm32-unknown-unknown --test browser --test opaque_holder -- --nocapture
+    - name: Dependency license inventory
+      if: always()
+      run: |
+        cargo metadata --locked --format-version 1 > dependency-metadata.json
+        node .github/check-licenses.mjs
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: cargo-lock
+        path: |
+          Cargo.lock
+          dependency-metadata.json
+    needs:
+    - resolve
   fuzz:
-    needs: check
+    needs:
+    - resolve
+    - check
+    - coverage
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
-        with:
-          toolchain: nightly
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        with:
-          workspaces: fuzz
-          cache-on-failure: true
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
-        with:
-          tool: cargo-fuzz
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: fuzz-corpus
-          path: fuzz/corpus/decode_encode
-      - name: Fuzz decode-encode identity
-        run: |
-          cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 > /dev/null
-          cargo fuzz run decode_encode --target x86_64-unknown-linux-gnu -- -max_total_time=30 -max_len=262144
-          git diff --exit-code -- fuzz/Cargo.lock
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: fuzz-evidence
-          path: |
-            fuzz/Cargo.lock
-            fuzz/artifacts
-
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: resolved-lock
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      with:
+        toolchain: nightly
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        workspaces: fuzz
+        cache-on-failure: true
+    - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
+      with:
+        tool: cargo-fuzz
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: fuzz-corpus
+        path: fuzz/corpus/decode_encode
+    - name: Fuzz decode-encode identity
+      run: |
+        cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 > /dev/null
+        cargo fuzz run decode_encode --target x86_64-unknown-linux-gnu -- -max_total_time=30 -max_len=262144
+        sha256sum --check resolved-lock.sha256
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: fuzz-evidence
+        path: |
+          fuzz/Cargo.lock
+          fuzz/artifacts
+    if: ${{ always() && needs.resolve.result == 'success' && needs.check.result == 'success' }}
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
-        with:
-          toolchain: stable
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
-        with:
-          tool: cargo-deny
-      - run: cargo metadata --locked --format-version 1 > dependency-metadata.json
-      - run: node .github/check-security.mjs
-      - run: node .github/check-advisory-exposure.mjs
-      - run: cargo deny --locked check advisories licenses
-      - run: cargo deny --manifest-path fuzz/Cargo.toml --locked check advisories licenses
-
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: resolved-lock
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      with:
+        toolchain: stable
+    - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
+      with:
+        tool: cargo-deny
+    - run: cargo metadata --locked --format-version 1 > dependency-metadata.json
+    - run: node .github/check-security.mjs
+    - run: node .github/check-advisory-exposure.mjs
+    - run: cargo deny --locked check advisories licenses
+    - run: cargo deny --manifest-path fuzz/Cargo.toml --locked check advisories licenses
+    needs:
+    - resolve
   dependency-policy:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - run: python3 .github/check-first-party.py
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: resolved-lock
+    - run: python3 .github/check-first-party.py
+    needs:
+    - resolve
+  coverage:
+    needs:
+    - resolve
+    - check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        persist-credentials: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: resolved-lock
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      with:
+        components: llvm-tools-preview
+        toolchain: nightly
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        prefix-key: coverage
+    - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
+      with:
+        tool: cargo-llvm-cov
+    - run: |-
+        rustc --version
+        cargo llvm-cov --version
+    - name: Measure real native round trips and failure paths
+      run: cargo llvm-cov --locked --workspace --all-features --branch --no-cfg-coverage --no-cfg-coverage-nightly
+        --ignore-filename-regex '/tests/' --json --output-path coverage.json
+    - name: Require complete line and branch coverage
+      run: python3 .github/check-coverage.py coverage.json
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: coverage
+        path: |-
+          coverage.json
+          Cargo.lock
+          resolver.txt
+        retention-days: 7
+'on':
+  push:
+    branches:
+    - '**'
+  pull_request: null
+  workflow_dispatch: null

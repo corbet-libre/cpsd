@@ -139,3 +139,22 @@ Global SQL deployments append `ISSUANCE_UNIQUENESS_SCHEMA` after
 `ISSUANCE_SCHEMA`. This new unique index fails closed on historical duplicates;
 it never silently frees a holder binding. Community presentation stores require
 only the original challenge schema. cglb delegates these invariants to cpsd.
+
+## Opaque holder port
+
+`OpaqueHolder` owns deterministic HolderSecret plus at most one pending opening
+and one verified Passport. `from_seed(&mut [u8;32])` wipes its input; the upstream
+ChaCha20/nonzero-arkworks recipe defines identity. Empty -> pending -> ready;
+ready may enter renewal while retaining its previous credential. A duplicate
+begin refuses; cancel drops only the opening; finish consumes an opening and
+updates the credential only after existing signature verification. No opening
+or credential object, scalar bytes, seed, RNG, Clone, Debug or serialization
+capability is exported. `present` retains the existing authenticated-community,
+signed-request, lifetime, expiry, policy epoch and proof checks.
+
+Authorization belongs to the embedding key manager. It must keep this object
+private and call it only inside a current authorized scope. Public identity
+reconstruction is deterministic; issuance/proof randomness is fresh and separate.
+Native and browser tests execute real blind issuance, proof verification,
+restoration equality, wrong-scope/expiry and failed-renewal refusal. Compile-fail
+examples guard the absence of scalar/serialization/cloning accessors.

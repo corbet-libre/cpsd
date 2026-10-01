@@ -1,0 +1,22 @@
+version: 2
+updates:
+- package-ecosystem: cargo
+  schedule:
+    interval: daily
+  open-pull-requests-limit: 1
+  groups:
+    cargo:
+      patterns:
+      - '*'
+  directories:
+  - /
+  - /fuzz
+- package-ecosystem: github-actions
+  directory: /
+  schedule:
+    interval: weekly
+  open-pull-requests-limit: 1
+  groups:
+    actions:
+      patterns:
+      - '*'

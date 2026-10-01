@@ -34,6 +34,7 @@ mod error;
 mod holder;
 mod ids;
 mod issuer;
+mod opaque_holder;
 mod params;
 mod presentation;
 mod proof_wire;
@@ -56,6 +57,7 @@ pub use ids::{CommunityId, GateId, KeyId, MAX_COMMUNITY_ID_LEN, MAX_ID_LEN};
 pub use issuer::{
     BlindPassport, IssuanceChallenge, IssuanceRequest, IssuerKey, IssuerPublicKey, IssuerTag,
 };
+pub use opaque_holder::OpaqueHolder;
 pub use presentation::{Presentation, PresentationRequest, Pseudonym, present, verify};
 
 pub use session::{Verifier, issuance_challenge, issue_blind_once};

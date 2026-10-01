@@ -311,3 +311,38 @@ Copyright 2026 Julian Y. Richard Corbet. Licensed under
 [LGPL-3.0-only](LICENSES/LGPL-3.0-only.txt)
 [WITH LGPL-3.0-linking-exception](LICENSES/LGPL-3.0-linking-exception.txt).
 See [LICENSE.md](LICENSE.md).
+
+## Continuous verification
+
+Dependency updates follow main and are tested against one CI-resolved lockfile.
+Line and branch coverage target 100%; failures remain blocking. See
+[the coverage contract](docs/COVERAGE.md) for measurement and exclusions.
+
+## Nonexporting deterministic holder
+
+`OpaqueHolder::from_seed(&mut [u8; 32])` is the narrow device-key-manager port.
+The dedicated holder seed is wiped after initialization. The engine retains its
+holder scalar, pending issuance opening and verified passport; it exposes only
+public issuance messages, signed attributes, issuer tags, pseudonyms and existing
+authenticated presentations. There are no secret, RNG, passport, Clone, Debug or
+serialization accessors. The key manager must retain the engine and enforce its
+fresh authorization before lending each operation.
+
+The identity recipe is upstream `rand_chacha::ChaCha20Rng::from_seed` at stream
+and position zero, followed by the existing arkworks nonzero scalar sampler.
+ChaCha20 is chosen instead of StdRng, whose algorithm is not a stable identity
+contract. The 0.3 compatibility line matches arkworks 0.4's rand-core traits;
+no RNG, scalar sampler, KDF or BBS+ primitive is implemented here. See the
+[upstream reproducibility contract](https://docs.rs/rand_chacha/latest/rand_chacha/).
+Changes to this recipe require explicit identity migration and fixed vectors.
+The seed is already purpose-separated by the caller; PRF roots never enter this
+API. Scalar/passport drop wiping remains in the existing zeroizing types;
+upstream RNG transient stack-state wiping is not a guarantee of rand_chacha.
+
+`begin_issuance` refuses a second outstanding attempt. `finish_issuance` consumes
+its opening even on rejection and installs only a verified answer. A failed
+renewal or cancellation preserves the previous verified passport. Fresh proof
+randomness is supplied independently for every issuance/presentation. This port
+does not export a vault checkpoint: restoring it derives identity and then
+performs fresh blind issuance. Legacy scalar-exporting APIs remain for existing
+callers and must not be exposed by the device key manager or a frontend.

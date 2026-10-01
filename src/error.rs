@@ -35,6 +35,12 @@ pub enum Error {
     /// The blind-issuance request does not prove knowledge of the committed
     /// holder secret for this issuer key and challenge.
     InvalidIssuanceRequest,
+    /// An opaque holder already retains an outstanding issuance opening.
+    IssuancePending,
+    /// No private issuance opening exists for this answer.
+    NoPendingIssuance,
+    /// The opaque holder has not installed a verified passport.
+    PassportUnavailable,
     /// The (unblinded) passport signature does not verify.
     InvalidSignature,
     /// The passport's validity period ended before the request's time.
@@ -82,6 +88,9 @@ impl fmt::Display for Error {
             Error::DuplicateKeyId => f.write_str("duplicate key ID in key ring"),
             Error::InvalidKey => f.write_str("invalid key"),
             Error::InvalidIssuanceRequest => f.write_str("invalid issuance request"),
+            Error::IssuancePending => f.write_str("issuance already pending"),
+            Error::NoPendingIssuance => f.write_str("no pending issuance"),
+            Error::PassportUnavailable => f.write_str("passport unavailable"),
             Error::InvalidSignature => f.write_str("invalid passport signature"),
             Error::PassportExpired => f.write_str("passport expired"),
             Error::WrongEpoch => f.write_str("wrong policy epoch"),
