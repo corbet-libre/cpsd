@@ -215,7 +215,7 @@ lookup before pairings and an atomic final `consume` to resolve races.
 Its `VerifiedIssuance` input has no public constructor, preventing accidental
 registration of unproven request tags through the store API. `MemoryStore` shares
 state across clones. Native `storage::libsql::LibsqlStore` uses the actual
-`crlt` API pinned to a reviewed main commit; no direct libSQL fallback is needed.
+`crlt` API following main with a reproducible locked revision; no direct libSQL fallback is needed.
 The default `storage` feature enables it on native; Wasm excludes it. Append
 `storage::libsql::SCHEMA` to the service's complete crlt migration history and
 `ISSUANCE_SCHEMA` as a **new** migration for the global issuer, then

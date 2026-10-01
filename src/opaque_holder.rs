@@ -2,9 +2,9 @@
 
 use crate::rand::{CryptoRng, RngCore, SeedableRng};
 use crate::{
-    AuthenticatedCommunity, BlindPassport, CommunityId, Error, HolderSecret,
-    IssuanceChallenge, IssuanceRequest, IssuerPublicKey, IssuerTag, Passport,
-    PassportAttributes, PendingIssuance, Presentation, Pseudonym, Timestamp,
+    AuthenticatedCommunity, BlindPassport, CommunityId, Error, HolderSecret, IssuanceChallenge,
+    IssuanceRequest, IssuerPublicKey, IssuerTag, Passport, PassportAttributes, PendingIssuance,
+    Presentation, Pseudonym, Timestamp,
 };
 use rand_chacha::ChaCha20Rng;
 use zeroize::Zeroize;

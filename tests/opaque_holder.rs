@@ -32,24 +32,15 @@ fn deterministic_identity_has_no_dependency_on_issuance_randomness() {
 fn opaque_issuance_and_refused_renewal_preserve_the_verified_identity() {
     let mut rng = StdRng::seed_from_u64(91);
     let gate = GateId::new("phone").unwrap();
-    let issuer = IssuerKey::generate(
-        &mut rng,
-        KeyId::new("issuer").unwrap(),
-        vec![gate.clone()],
-    )
-    .unwrap();
-    let other = IssuerKey::generate(
-        &mut rng,
-        KeyId::new("other").unwrap(),
-        vec![gate.clone()],
-    )
-    .unwrap();
+    let issuer =
+        IssuerKey::generate(&mut rng, KeyId::new("issuer").unwrap(), vec![gate.clone()]).unwrap();
+    let other =
+        IssuerKey::generate(&mut rng, KeyId::new("other").unwrap(), vec![gate.clone()]).unwrap();
     let mut holder = OpaqueHolder::from_seed(&mut [7; 32]);
     let community = CommunityId::new(b"community-a").unwrap();
     let nym = holder.pseudonym(&community);
     let attributes = PassportAttributes::new(2000, 7).with_gate(gate.clone(), 1500);
-    let request =
-        PresentationRequest::new(&mut rng, community.clone(), 7, [gate], 1000).unwrap();
+    let request = PresentationRequest::new(&mut rng, community.clone(), 7, [gate], 1000).unwrap();
     let mut signer = csgn::Signer::new(
         "cmty:test",
         csgn::SecretKey::from_seed(&mut [4; 32]),
@@ -83,7 +74,10 @@ fn opaque_issuance_and_refused_renewal_preserve_the_verified_identity() {
         .unwrap();
     holder.finish_issuance(&blind).unwrap();
     assert_eq!(holder.attributes(), Some(&attributes));
-    assert_eq!(holder.finish_issuance(&blind), Err(Error::NoPendingIssuance));
+    assert_eq!(
+        holder.finish_issuance(&blind),
+        Err(Error::NoPendingIssuance)
+    );
     let proof = holder.present(&mut rng, &expected, &signed, 1000).unwrap();
     assert_eq!(
         verify(&mut rng, &[issuer.public_key().clone()], &request, &proof).unwrap(),
@@ -94,7 +88,11 @@ fn opaque_issuance_and_refused_renewal_preserve_the_verified_identity() {
         CommunityId::new(b"other-community").unwrap(),
         signer.key_ring().clone(),
     );
-    assert!(holder.present(&mut rng, &wrong_scope, &signed, 1000).is_err());
+    assert!(
+        holder
+            .present(&mut rng, &wrong_scope, &signed, 1000)
+            .is_err()
+    );
 
     // A response signed for another issuer cannot replace a verified passport.
     let other_request = holder
@@ -108,7 +106,10 @@ fn opaque_issuance_and_refused_renewal_preserve_the_verified_identity() {
     holder
         .begin_issuance(&mut rng, issuer.public_key(), &challenge)
         .unwrap();
-    assert_eq!(holder.finish_issuance(&wrong_blind), Err(Error::KeyMismatch));
+    assert_eq!(
+        holder.finish_issuance(&wrong_blind),
+        Err(Error::KeyMismatch)
+    );
     assert_eq!(holder.attributes(), Some(&attributes));
     assert_eq!(holder.pseudonym(&community), nym);
     let proof = holder.present(&mut rng, &expected, &signed, 1000).unwrap();

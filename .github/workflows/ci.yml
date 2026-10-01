@@ -1,7 +1,8 @@
 name: ci
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci
+  cancel-in-progress: false
+  queue: max
 permissions:
   contents: read
 env:
@@ -206,6 +207,8 @@ jobs:
     - name: Measure real native round trips and failure paths
       run: cargo llvm-cov --locked --workspace --all-features --branch --no-cfg-coverage --no-cfg-coverage-nightly
         --ignore-filename-regex '/tests/' --json --output-path coverage.json
+    - name: Export exact line and branch locations
+      run: cargo llvm-cov report --locked --branch --ignore-filename-regex '/tests/' --lcov --output-path coverage.lcov
     - name: Require complete line and branch coverage
       run: python3 .github/check-coverage.py coverage.json
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -214,12 +217,13 @@ jobs:
         name: coverage
         path: |-
           coverage.json
+          coverage.lcov
           Cargo.lock
           resolver.txt
         retention-days: 7
 'on':
   push:
     branches:
-    - '**'
+    - main
   pull_request: null
   workflow_dispatch: null
