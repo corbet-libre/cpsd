@@ -152,8 +152,10 @@ or credential object, scalar bytes, seed, RNG, Clone, Debug or serialization
 capability is exported. `present` retains the existing authenticated-community,
 signed-request, lifetime, expiry, policy epoch and proof checks.
 
-Authorization belongs to the embedding key manager. It must keep this object
-private and call it only inside a current authorized scope. Public identity
+Wallet (`cwlt`) retains this object and the passport, and calls it only through
+a current authorized capability. Keys (`ckmg`) derives the dedicated holder seed;
+it does not retain the holder or perform presentations. Vault only wires the
+Wallet capability. Public identity
 reconstruction is deterministic; issuance/proof randomness is fresh and separate.
 Native and browser tests execute real blind issuance, proof verification,
 restoration equality, wrong-scope/expiry and failed-renewal refusal. Compile-fail

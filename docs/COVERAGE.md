@@ -21,3 +21,26 @@ Cargo.lock, with exactly one source per first-party crate. Dependabot maintains
 committed snapshots; CI refreshes once per run and retains the tested snapshot.
 Auto-merge requires protected main and successful substantive checks on the
 exact current Dependabot head. It never executes PR code with write permissions.
+
+## Emitted source metric
+
+The acceptance metric is now 100% of upstream LLVM LCOV's emitted production
+source line counters (DA) and branch counters (BRDA), from the same execution as
+the retained raw JSON. This is source coverage, not every generic instantiation.
+LLVM JSON and LCOV summary totals can count generic copies differently from
+the merged source records. The original JSON checker remains diagnostic code;
+its stricter instantiation totals are not described as passed.
+
+The source gate requires a nonempty report, an exact file inventory matching the
+companion JSON, matching raw summary metadata, complete emitted branch counts
+and no duplicate, unknown or zero counters. It has no production exclusions.
+Actual browser/device execution remains separate from native coverage.
+
+The coverage job sets `CARGO_PROFILE_TEST_OPT_LEVEL=0` for this workspace. The
+ordinary native/performance and release/browser profiles are unchanged; the
+existing upstream pairing dependency optimization override remains. An earlier
+optimized profile reported zero for an accessor exercised by real assertions.
+The [rustc coverage guide](https://doc.rust-lang.org/rustc/instrument-coverage.html)
+explains that optimizing functions away can invalidate coverage mapping. This
+measurement configuration retains owned bodies instead of excluding them. It
+is a diagnostic correction, not evidence that the remaining gaps are covered.

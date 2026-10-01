@@ -320,13 +320,15 @@ Line and branch coverage target 100%; failures remain blocking. See
 
 ## Nonexporting deterministic holder
 
-`OpaqueHolder::from_seed(&mut [u8; 32])` is the narrow device-key-manager port.
+`OpaqueHolder::from_seed(&mut [u8; 32])` is the narrow passport engine embedded
+by `cwlt` Wallet. `ckmg` Keys derives the dedicated, purpose-separated seed.
 The dedicated holder seed is wiped after initialization. The engine retains its
 holder scalar, pending issuance opening and verified passport; it exposes only
 public issuance messages, signed attributes, issuer tags, pseudonyms and existing
 authenticated presentations. There are no secret, RNG, passport, Clone, Debug or
-serialization accessors. The key manager must retain the engine and enforce its
-fresh authorization before lending each operation.
+serialization accessors. Wallet retains the engine and passport, and enforces
+a current authorized capability before lending each operation. Vault wires that
+capability; Keys does not retain the passport or perform presentations.
 
 The identity recipe is upstream `rand_chacha::ChaCha20Rng::from_seed` at stream
 and position zero, followed by the existing arkworks nonzero scalar sampler.
@@ -345,4 +347,4 @@ renewal or cancellation preserves the previous verified passport. Fresh proof
 randomness is supplied independently for every issuance/presentation. This port
 does not export a vault checkpoint: restoring it derives identity and then
 performs fresh blind issuance. Legacy scalar-exporting APIs remain for existing
-callers and must not be exposed by the device key manager or a frontend.
+callers and must not be exposed by Wallet or a frontend.

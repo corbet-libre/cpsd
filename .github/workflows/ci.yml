@@ -20,6 +20,8 @@ jobs:
     - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
       with:
         toolchain: stable
+    - name: Validate the committed dependency snapshot before refreshing
+      run: python3 .github/check-first-party.py
     - name: Resolve one fresh dependency snapshot
       run: 'cargo update
 
@@ -66,6 +68,17 @@ jobs:
         cache-on-failure: true
     - run: rustc --version
     - run: cargo fmt --all --check
+      id: fmt
+    - name: Retain the exact runner formatting patch
+      if: failure() && steps.fmt.outcome == 'failure'
+      run: 'cargo fmt --all
+
+        git diff --binary > "$RUNNER_TEMP/rustfmt.patch"'
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: failure() && steps.fmt.outcome == 'failure'
+      with:
+        name: rustfmt-patch
+        path: ${{ runner.temp }}/rustfmt.patch
     - run: node --test .github/check-pins.test.mjs
     - run: cargo metadata --locked --format-version 1 > dependency-metadata.json
     - run: node .github/check-pins.mjs dependency-metadata.json
@@ -90,7 +103,7 @@ jobs:
 
         google-chrome --version
 
-        cargo test --release --locked --target wasm32-unknown-unknown --test browser --test opaque_holder -- --nocapture
+        cargo test --release --locked --target wasm32-unknown-unknown --test browser --test opaque_holder --test boundaries -- --nocapture
 
         '
     - name: Dependency license inventory
@@ -228,8 +241,12 @@ jobs:
       run: cargo llvm-cov --locked --workspace --all-features --branch --no-cfg-coverage --no-cfg-coverage-nightly --ignore-filename-regex '/tests/' --json --output-path coverage.json
     - name: Export exact line and branch locations
       run: cargo llvm-cov report --locked --branch --ignore-filename-regex '/tests/' --lcov --output-path coverage.lcov
+    - name: Cross-check emitted line inventory independently
+      run: cargo llvm-cov report --locked --branch --ignore-filename-regex '/tests/' --text --output-path coverage.txt
     - name: Require complete line and branch coverage
-      run: python3 .github/check-coverage.py coverage.json
+      run: 'python3 .github/test-source-coverage.py
+
+        python3 .github/check-source-coverage.py coverage.lcov coverage.json coverage.txt'
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: always()
       with:
@@ -238,10 +255,14 @@ jobs:
 
           coverage.lcov
 
+          coverage.txt
+
           Cargo.lock
 
           resolver.txt'
         retention-days: 7
+    env:
+      CARGO_PROFILE_TEST_OPT_LEVEL: '0'
 'on':
   push:
     branches:

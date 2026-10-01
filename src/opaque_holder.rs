@@ -11,8 +11,9 @@ use zeroize::Zeroize;
 
 /// Nonexporting deterministic holder and its current issuance state.
 ///
-/// The embedding key manager owns fresh authorization and lends access to this
-/// engine. No secret, RNG, pending opening or passport accessor exists; there is
+/// Wallet retains this engine and lends access through current authorization.
+/// Keys only derives its purpose-separated seed. No secret, RNG, pending opening
+/// or passport accessor exists; there is
 /// no Clone, Debug or serialization implementation. Public issuance messages and
 /// presentations still use the original upstream BBS+ implementation.
 ///
@@ -27,6 +28,10 @@ use zeroize::Zeroize;
 /// ```compile_fail
 /// let holder = cpsd::OpaqueHolder::from_seed(&mut [7; 32]);
 /// let copy = holder.clone();
+/// ```
+/// ```compile_fail
+/// let holder = cpsd::OpaqueHolder::from_seed(&mut [7; 32]);
+/// let diagnostic = format!("{holder:?}");
 /// ```
 pub struct OpaqueHolder {
     secret: HolderSecret,
