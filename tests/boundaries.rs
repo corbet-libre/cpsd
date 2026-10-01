@@ -29,7 +29,10 @@ fn identifiers_preserve_exact_scope_and_refuse_log_control_characters() {
     assert!(CommunityId::new(vec![0; MAX_COMMUNITY_ID_LEN + 1]).is_err());
     let binary = CommunityId::new(vec![0xff; MAX_COMMUNITY_ID_LEN]).unwrap();
     assert_eq!(binary.as_bytes(), &[0xff; MAX_COMMUNITY_ID_LEN]);
-    assert_eq!(format!("{binary:?}"), format!("CommunityId({})", "ff".repeat(MAX_COMMUNITY_ID_LEN)));
+    assert_eq!(
+        format!("{binary:?}"),
+        format!("CommunityId({})", "ff".repeat(MAX_COMMUNITY_ID_LEN))
+    );
     let text = CommunityId::new(b"line\nbreak").unwrap();
     assert!(!format!("{text:?}").contains('\n'));
     assert_ne!(text, CommunityId::new(b"line\\nbreak").unwrap());
@@ -51,7 +54,10 @@ fn secret_restore_refuses_zero_scalar_and_debug_never_exports_it() {
     let mut zero = bytes.to_vec();
     let start = zero.len() - 32;
     zero[start..].fill(0);
-    assert!(matches!(HolderSecret::from_bytes(&zero), Err(Error::InvalidKey)));
+    assert!(matches!(
+        HolderSecret::from_bytes(&zero),
+        Err(Error::InvalidKey)
+    ));
     let mut trailing = bytes.to_vec();
     trailing.push(0);
     assert!(HolderSecret::from_bytes(&trailing).is_err());
