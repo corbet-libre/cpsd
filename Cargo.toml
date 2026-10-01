@@ -18,15 +18,15 @@ default = ["storage"]
 storage = ["dep:crlt"]
 
 [dependencies]
-rand_chacha = "0.3"
+rand_chacha = "0.10"
 csgn = { git = "https://github.com/corbet-foss/csgn", branch = "main", default-features = false }
-ark-bls12-381 = { version = "=0.4.0", default-features = false, features = ["curve"] }
-ark-ec = { version = "=0.4.2", default-features = false }
-ark-ff = { version = "=0.4.2", default-features = false }
-ark-serialize = { version = "=0.4.2", default-features = false }
-ark-std = { version = "=0.4.0", default-features = false }
+ark-bls12-381 = { version = "=0.6.0", default-features = false, features = ["curve"] }
+ark-ec = { version = "=0.6.0", default-features = false }
+ark-ff = { version = "=0.6.0", default-features = false }
+ark-serialize = { version = "=0.6.0", default-features = false }
+ark-std = { version = "=0.6.0", default-features = false }
 bbs_plus = { version = "=0.25.0", default-features = false }
-blake2 = { version = "=0.10.6", default-features = false }
+blake2 = { version = "=0.11.0", default-features = false }
 bulletproofs_plus_plus = { version = "=0.9.0", default-features = false }
 dock_crypto_utils = { version = "=0.23.0", default-features = false }
 zeroize = { version = "1.9", features = ["derive"] }
@@ -49,7 +49,7 @@ proof_system = { version = "=0.34.0", default-features = false, features = ["was
 
 [dev-dependencies]
 csgn = { git = "https://github.com/corbet-foss/csgn", branch = "main", features = ["volatile-signer"] }
-rand = { version = "0.8", features = ["std_rng"] }
+rand = { version = "0.10", features = ["std_rng"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
