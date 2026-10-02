@@ -26,9 +26,10 @@ a production security certification. No registry publication.
    `verify` checks the proof against the verifier's own request and trusted key
    ring and returns a `Pseudonym`, usable as the community member ID.
 
-Structured wire types have versioned `to_bytes`/`from_bytes` methods. The envelope is
-version 2, rejecting earlier development encodings; the signed message layout
-and cryptographic domain labels retain their v1 definition. Holder vault
+Structured wire types have versioned `to_bytes`/`from_bytes` methods. IssuanceRequest, PresentationRequest and Presentation use envelope v3 and the
+explicit v3 transcript described in [the migration contract](docs/PROOF-V3.md).
+All other envelopes, including immutable sealed holder storage, remain v2.
+The signed message layout, generators and identity derivation retain v1. Holder vault
 encodings contain secrets and return zeroizing buffers. Issuer key backups
 belong in the caller's secret store. Randomness uses caller-supplied
 `rand` 0.8 `RngCore + CryptoRng`; browser callers must seed from the OS/browser
@@ -41,17 +42,17 @@ Neither a holder-supplied time nor a holder-supplied key ring is authoritative.
 
 ## Dependency survey and choice
 
-Reviewed upstream sources and crates.io's index on 2026-09-30:
+Reviewed upstream sources on 2026-10-02; actual fresh resolution and full acceptance remain required:
 
 | Candidate | Decision |
 |---|---|
-| [Dock crypto](https://github.com/docknetwork/crypto): [`bbs_plus` 0.25.0](https://crates.io/crates/bbs_plus), [`proof_system` 0.34.0](https://crates.io/crates/proof_system), `bulletproofs_plus_plus` 0.9.0, `dock_crypto_utils` 0.23.0 (Apache-2.0) | Selected. Blind BBS+ issuance, composite witness equalities, hidden range predicates, and an upstream Wasm path. These are the latest published releases found in the registry index, dated 2025-08-03; maintenance is uneven, not assumed current merely from the project name. Exact versions preserve the reviewed proof encoding. |
+| [Dock crypto](https://github.com/docknetwork/crypto): [`bbs_plus` 0.25.0](https://crates.io/crates/bbs_plus), [`schnorr_pok` 0.23.0](https://crates.io/crates/schnorr_pok), `bulletproofs_plus_plus` 0.9.0, `dock_crypto_utils` 0.23.0 (Apache-2.0) | Selected lower crates. Blind BBS+ issuance, shared-blinding/shared-challenge Schnorr equality and Bulletproofs++ arbitrary-range proofs use maintained upstream APIs. Compatible ranges follow the same family; real native/browser proof vectors gate each resolved graph. No local primitive or dependency fork. |
 | [Dock pseudonyms](https://github.com/docknetwork/crypto-wasm-ts#pseudonyms) | Selected composition: a one-base Pedersen/Schnorr statement with its secret equated to the hidden BBS+ message. Upstream primitives implement all cryptography. |
 | [Dock SyRA](https://github.com/docknetwork/crypto/tree/main/syra) (Apache-2.0) | Reviewed but unnecessary here: SyRA handles low-entropy credential attributes through a different issuance protocol. Our holder secret is uniformly random and high entropy. |
 | [zkryptium](https://github.com/Cybersecurity-LINKS/zkryptium) (Apache-2.0) | Useful IETF draft reference/fallback, not selected: research implementation and a different suite; it does not supply this composite range-proof/accumulator path. Its optional CL03/GMP path must not be confused with its BBS features. |
 | [MATTR pairing_crypto](https://github.com/mattrglobal/pairing_crypto) (Apache-2.0) | Reviewed as another BBS implementation; lacks the selected composite predicate path. |
 | [AnonCreds](https://github.com/anoncreds/anoncreds-rs) (Apache-2.0) | CL issuance/revocation is a different, heavier stack, without the chosen browser pseudonym composition. |
-| [csgn](https://github.com/corbet-foss/csgn/tree/d7203f310c3c129c3f67ef4ef3e34ccf0ae8c93b) | Selected for request authentication: main already exposes strict COSE verification and persistent signing. Pin the reviewed revision; use verification-only features in the library. Direct coset + dalek would duplicate its canonicalization, key-ring and retention rules. |
+| [csgn](https://github.com/corbet-foss/csgn/tree/d7203f310c3c129c3f67ef4ef3e34ccf0ae8c93b) | Selected for request authentication: main already exposes strict COSE verification and persistent signing. Track maintained main and use verification-only features in the library. Direct coset + dalek would duplicate its canonicalization, key-ring and retention rules. |
 | [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) | Selected for CI advisories and SPDX license checks. cargo-audit alone would not cover licenses. No crypto changes. |
 | [crlt](https://github.com/corbet-foss/crlt) | Its GitHub main exposes scoped transactions, migrations and indexed queries over official libSQL; selected for native storage. |
 
@@ -62,16 +63,20 @@ dependency is permitted. The package's own LGPL linking exception is unchanged. 
 resolved license inventory against reviewed expressions; `self_cell` uses its
 Apache-2.0 alternative, not its optional GPL license.
 
-`proof_system` unconditionally pulls Circom/LegoGroth16 and Wasmer even though
-cpsd never uses them. We select Wasmer's native backend on native and JavaScript
-backend on Wasm. This is substantial upstream dependency overhead. Our decoder
-only accepts the BBS+/Schnorr/Bulletproofs++ proof variants used here.
-Wasmer 6.1.0 fails against the newer typed JavaScript function and Wasm pointer
-APIs, so the Wasm bridge is pinned to its [upstream lockfile's compatible
-versions](https://github.com/wasmerio/wasmer/blob/v6.1.0/Cargo.lock):
-`wasm-bindgen` 0.2.104 and `js-sys`/`web-sys` 0.3.81. The test runner uses the
-matching version. Review this compatibility constraint when upgrading Dock;
-no Wasmer or cryptographic implementation is forked here.
+`proof_system` 0.34 unconditionally activates LegoGroth16/Circom/Wasmer. Its
+Wasmer 6 browser ABI does not support the current browser bridge. The v3 migration
+therefore composes only the exact original statements through Dock's lower public
+APIs; it does not claim composite transcript or wire compatibility. The original
+BBS+ signature and pseudonym derivation are unchanged. A return to maintained
+`proof_system` requires upstream feature isolation and actual compatibility vectors.
+The decoder accepts only fixed BBS+/Schnorr/Bulletproofs++ shapes before allocation.
+Browser bridge dependencies use compatible Cargo version ranges so downstream
+device crates can share one current `wasm-bindgen`/`js-sys` graph. CI refreshes a
+single lockfile and installs the exact matching upstream test runner, checking
+its published checksum before actual Chrome vectors. Historical Wasmer 6.1.0
+compatibility failures with newer typed JavaScript APIs remain an upstream
+integration concern; a successful resolver alone does not establish browser
+compatibility. No Wasmer or cryptographic implementation is forked here.
 
 ## Security decisions
 
@@ -81,8 +86,7 @@ expiry per gate (zero means absent). No raw gate data or provider identifiers
 enter the passport. The issuer is responsible for checking providers and
 normalizing their results before signing.
 
-Issuance uses a perfectly hiding Pedersen commitment to the secret. A Dock
-composite proof binds knowledge of that commitment's opening to an issuer-only
+Issuance uses a perfectly hiding Pedersen commitment to the secret. Dock Schnorr proofs with checked equal responses bind knowledge of that commitment's opening to an issuer-only
 tag derived from the same secret. `cglb` must bind that tag to the authenticated
 person's uniqueness fingerprint on first issuance and require it on renewal;
 otherwise a person could choose another secret and obtain new community IDs.
@@ -345,6 +349,25 @@ upstream RNG transient stack-state wiping is not a guarantee of rand_chacha.
 its opening even on rejection and installs only a verified answer. A failed
 renewal or cancellation preserves the previous verified passport. Fresh proof
 randomness is supplied independently for every issuance/presentation. This port
-does not export a vault checkpoint: restoring it derives identity and then
-performs fresh blind issuance. Legacy scalar-exporting APIs remain for existing
+does not export plaintext. Legacy scalar-exporting APIs remain for existing
 callers and must not be exposed by Wallet or a frontend.
+
+For durable custody, Keys alone constructs the engine with
+`from_seed_and_sealing_key`, consuming and wiping a dedicated holder seed and
+wallet-purpose key derived from its retained common root. The maintained
+RustCrypto `chacha20poly1305 ^0.11` implementation supplies XChaCha20-Poly1305;
+this matches the maintained primitive already used by Keys. A private immutable
+cipher and wallet context remain inside CPSD. `seal(rng)` takes no key, and
+`restored(&SealedHolder)` returns a separate opaque candidate, never plaintext.
+An unsealed legacy engine cannot acquire a caller-chosen key or export itself.
+
+The new versioned holder container wraps the original secret, pending-issuance
+and passport codecs; those buffers wipe on drop. Restore verifies AEAD, wallet
+context, original codec semantics, passport signature and equality to the
+seeded holder identity. The public `SealedHolder` codec handles bounded ciphertext
+only. Wallet stores it using the actual cwst compound transaction and adopts
+only against its nonforgeable commit receipt. Old authentic ciphertext is not
+proof of freshness; Store owns version fencing and unknown-outcome recovery.
+Legacy on-disk migration belongs inside Keys, with no automatic plaintext
+fallback. New native/browser restart and tamper vectors are written but not yet
+qualified against a fresh dependency lock.

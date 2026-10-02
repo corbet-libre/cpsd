@@ -13,7 +13,6 @@ use zeroize::Zeroizing;
 use crate::{Error, GateId, KeyId};
 
 const MAGIC: &[u8; 4] = b"cpsd";
-const FORMAT_VERSION: u8 = 2;
 
 /// Upper bound for any encoded object; bounds allocation and verification work
 /// for untrusted input.
@@ -31,6 +30,30 @@ pub(crate) enum Kind {
     HolderSecret = 7,
     PresentationRequest = 8,
     Presentation = 9,
+    OpaqueHolder = 10,
+    SealedHolder = 11,
+    OpaqueHolderWithRootBoard = 12,
+    RootBoardState = 13,
+    RootBoardPublicKey = 14,
+    RootBoardIssuanceContext = 15,
+    RootBoardIssuanceRequest = 16,
+    BlindRootBoardCredential = 17,
+    RootBoardRequest = 18,
+    RootBoardPresentation = 19,
+}
+
+impl Kind {
+    // Only exchanged proofs and the authenticated presentation request migrate.
+    // Original key, passport, pending issuance and immutable seal codecs stay v2.
+    fn version(self) -> u8 {
+        match self {
+            Self::IssuanceRequest | Self::PresentationRequest | Self::Presentation
+            | Self::OpaqueHolderWithRootBoard | Self::RootBoardState | Self::RootBoardPublicKey
+            | Self::RootBoardIssuanceContext | Self::RootBoardIssuanceRequest
+            | Self::BlindRootBoardCredential | Self::RootBoardRequest | Self::RootBoardPresentation => 3,
+            _ => 2,
+        }
+    }
 }
 
 /// Encoder. The buffer is wiped on drop because some kinds contain secrets.
@@ -42,9 +65,13 @@ impl Writer {
     pub(crate) fn new(kind: Kind) -> Self {
         // Reserve generously so that secret bytes are not left behind in
         // reallocated (unwiped) buffers for the small secret-bearing kinds.
-        let mut buf = Zeroizing::new(Vec::with_capacity(16 * 1024));
+        Self::with_capacity(kind, 16 * 1024)
+    }
+
+    pub(crate) fn with_capacity(kind: Kind, capacity: usize) -> Self {
+        let mut buf = Zeroizing::new(Vec::with_capacity(capacity));
         buf.extend_from_slice(MAGIC);
-        buf.push(FORMAT_VERSION);
+        buf.push(kind.version());
         buf.push(kind as u8);
         Self { buf }
     }
@@ -108,7 +135,7 @@ impl<'a> Reader<'a> {
         if r.take(4)? != MAGIC {
             return Err(Error::Decode("magic"));
         }
-        if r.take(1)?[0] != FORMAT_VERSION {
+        if r.take(1)?[0] != kind.version() {
             return Err(Error::Decode("format version"));
         }
         if r.take(1)?[0] != kind as u8 {

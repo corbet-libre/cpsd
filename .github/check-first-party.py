@@ -71,7 +71,11 @@ def self_test():
 if __name__ == '__main__':
     self_test()
     if '--self-test' not in sys.argv:
-        paths = subprocess.check_output(['git', 'ls-files', '-z'], text=True).split('\0')
+        if '--archive' in sys.argv:
+            paths = [str(path) for path in Path('.').rglob('Cargo.*')
+                     if not {'.git', '.build', 'target', 'node_modules'}.intersection(path.parts)]
+        else:
+            paths = subprocess.check_output(['git', 'ls-files', '-z'], text=True).split('\0')
         for name in paths:
             path = Path(name)
             if path.name == 'Cargo.toml':

@@ -1,6 +1,6 @@
-# cpsd contract, wire format version 2
+# cpsd contract, proof exchange v3 and stored objects v2
 
-Rust facade over Dock BBS+ and composite proofs. Native and wasm32 holder and
+Rust facade over Dock BBS+, Schnorr and Bulletproofs++ proofs. Native and wasm32 holder and
 verifier core. LGPL-3.0-only WITH LGPL-3.0-linking-exception. No own cryptographic
 primitives, raw gate data, login dates, request logging or registry publication.
 
@@ -105,8 +105,9 @@ real Turso tests skip unless both environment credentials are supplied.
 The browser acceptance target is enforced for the recommended common-expiry
 profile. Independent hidden-expiry proofs are measured but currently exceed
 one second with multiple predicates. Mobile performance remains unmeasured.
-Envelope version 2 rejects the earlier development format; the signed message
-layout and cryptographic domain labels remain v1 (issuance storage binding is v2). Accumulator revocation remains future work.
+Proof exchange kinds 3/8/9 require envelope v3 and the explicit v3 transcript.
+Other objects remain v2; the signed message layout, identity and parameter domains
+remain v1 (issuance storage binding is v2). See PROOF-V3.md. Accumulator revocation remains future work.
 
 ## Trust and audit boundaries
 
@@ -171,3 +172,29 @@ community bytes `community-a`. Its canonical compressed pseudonym hex is:
 Native and actual browser tests assert this same fixed value before performing
 fresh issuance. The test request uses the existing shared-epoch expiry profile
 and the authenticated request's required exclusive COSE expiry (`now + 1`).
+
+## Sealed holder persistence
+
+Keys supplies a separately derived wallet-purpose key with the dedicated seed to
+`OpaqueHolder::from_seed_and_sealing_key`; both input buffers are wiped even on
+context validation failure. The retained cipher/context cannot be extracted,
+replaced or selected by `seal`/`restored`. There is no plaintext checkpoint API.
+The unsealed `from_seed` constructor remains unsealable for its entire lifetime.
+
+The maintained XChaCha20-Poly1305 implementation seals the original holder,
+pending issuance and passport codecs. AAD is `cpsd.opaque-holder.v1\0` followed
+by Keys' canonical wallet context. The outer original cpsd format-version2 kind11
+contains a fresh 24-byte nonce and length-prefixed ciphertext/tag. The private
+kind10 plaintext contains three original length-prefixed codecs; an absent
+pending/passport is the empty field. Total sealed input is at most256KiB.
+Plaintext buffers have exact capacity and wipe on drop; no new primitive/KDF is
+implemented. Restoring revalidates original codecs, the passport signature, and
+every private object's seeded holder identity before producing a candidate.
+
+Only sealed bytes cross to Wallet/Store. The candidate does not establish
+durability, anti-rollback or live authorization. Wallet must retain its original
+Store/version and obtain the exact actual compound-CAS receipt before adopting a
+candidate; cancellation/unknown writes require original Store reconciliation.
+Existing on-disk formats migrate explicitly inside Keys; this codec never guesses
+an old plaintext format or resets custody. Browser dependency and full coverage
+qualification remain mandatory and are not implied by these source contracts.

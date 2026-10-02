@@ -4,10 +4,14 @@ use crate::rand::{CryptoRng, RngCore, SeedableRng};
 use crate::{
     AuthenticatedCommunity, BlindPassport, CommunityId, Error, HolderSecret, IssuanceChallenge,
     IssuanceRequest, IssuerPublicKey, IssuerTag, Passport, PassportAttributes, PendingIssuance,
-    Presentation, Pseudonym, Timestamp,
+    Presentation, Pseudonym, RootBoardIssuanceRequest, RootBoardPresentation, Timestamp,
+    root_board::{self, BlindRootBoardCredential, state::RootBoardState},
 };
 use rand_chacha::ChaCha20Rng;
 use zeroize::Zeroize;
+
+mod sealing;
+pub use sealing::SealedHolder;
 
 /// Nonexporting deterministic holder and its current issuance state.
 ///
@@ -37,6 +41,9 @@ pub struct OpaqueHolder {
     secret: HolderSecret,
     pending: Option<PendingIssuance>,
     passport: Option<Passport>,
+    // Private extension, retained and sealed only beside the original state.
+    root_board: RootBoardState,
+    sealing: Option<std::sync::Arc<sealing::HolderSeal>>,
 }
 
 impl OpaqueHolder {
@@ -54,6 +61,8 @@ impl OpaqueHolder {
             secret: HolderSecret::generate(&mut rng),
             pending: None,
             passport: None,
+            root_board: RootBoardState::default(),
+            sealing: None,
         }
     }
 
@@ -119,5 +128,71 @@ impl OpaqueHolder {
             .as_ref()
             .ok_or(Error::PassportUnavailable)?
             .present(rng, expected, signed_request, now)
+    }
+
+    /// Start the same-holder root-board issuance with the retained passport.
+    ///
+    /// `expected` is the ROOT community's authenticated origin mapping and
+    /// `signed_context` the root service's csgn Credential over the exact
+    /// context. The commitment, source-pseudonym proof and secret equality are
+    /// produced from the retained passport; no secret or opening is returned.
+    /// A pending root attempt must finish or be cancelled first. A failed
+    /// renewal leaves the previous verified root credential and the global
+    /// passport usable.
+    pub fn begin_root_board_issuance<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        expected: &AuthenticatedCommunity,
+        signed_context: &[u8],
+        now: Timestamp,
+    ) -> Result<RootBoardIssuanceRequest, Error> {
+        if self.root_board.pending.is_some() {
+            return Err(Error::IssuancePending);
+        }
+        let passport = self.passport.as_ref().ok_or(Error::PassportUnavailable)?;
+        let context = expected.authenticate_root_board_issuance(signed_context, now)?;
+        let (request, pending) = root_board::begin_issuance(rng, passport, &context)?;
+        self.root_board.pending = Some(pending);
+        Ok(request)
+    }
+
+    /// Consume the pending root opening and install only a signature-verified
+    /// answer. Even an invalid answer consumes the attempt; the previous root
+    /// credential and global passport remain unchanged.
+    pub fn finish_root_board_issuance(
+        &mut self,
+        blind: &BlindRootBoardCredential,
+    ) -> Result<(), Error> {
+        self.root_board.finish(blind)
+    }
+
+    /// Drop a pending root opening without affecting any verified credential.
+    pub fn cancel_root_board_issuance(&mut self) {
+        self.root_board.pending = None;
+    }
+
+    /// Whether a verified root credential is retained (no attributes or bytes).
+    pub fn has_root_board(&self) -> bool {
+        self.root_board.credential.is_some()
+    }
+
+    /// Prove both retained credentials against one authenticated root request.
+    /// The two proofs share the hidden holder secret; the result carries only
+    /// the root-community pseudonym and no source community, role or tag.
+    pub fn present_root_board<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        expected: &AuthenticatedCommunity,
+        signed_request: &[u8],
+        now: Timestamp,
+    ) -> Result<RootBoardPresentation, Error> {
+        let passport = self.passport.as_ref().ok_or(Error::PassportUnavailable)?;
+        let credential = self
+            .root_board
+            .credential
+            .as_ref()
+            .ok_or(Error::PassportUnavailable)?;
+        let request = expected.authenticate_root_board_request(signed_request, now)?;
+        root_board::present(rng, passport, credential, &request)
     }
 }

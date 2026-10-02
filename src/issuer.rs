@@ -13,22 +13,15 @@ use bbs_plus::{
     setup::{PublicKeyG2, SecretKey, SignatureParamsG1},
     signature::SignatureG1,
 };
-use blake2::Blake2b512;
-use proof_system::{
-    meta_statement::{EqualWitnesses, MetaStatements},
-    proof::Proof,
-    proof_spec::ProofSpec,
-    statement::{Statements, ped_comm::PedersenCommitment as PedersenCommitmentStmt},
-    verifier::VerifierConfig,
-};
 use zeroize::Zeroizing;
 
 use crate::{
     Error, GateId, KeyId, MAX_GATES, PassportAttributes,
     params::{
-        self, Curve, DOMAIN_ISSUANCE, IDX_EPOCH, IDX_FIRST_GATE, IDX_KEY_ID, IDX_REVOCATION,
-        IDX_SECRET, IDX_VALID_UNTIL, Label,
+        self, Curve, IDX_EPOCH, IDX_FIRST_GATE, IDX_KEY_ID, IDX_REVOCATION, IDX_SECRET,
+        IDX_VALID_UNTIL,
     },
+    proof::IssuanceProof,
     wire::{Kind, Reader, Writer},
 };
 
@@ -248,6 +241,15 @@ impl IssuerKey {
         attributes.validate(&self.public.gates)?;
         request.verify(rng, &self.public, challenge)?;
 
+        self.issue_commitment(rng, &request.commitment, attributes)
+    }
+
+    // Only verified original issuance paths may call this private signing step.
+    pub(crate) fn issue_commitment<R: RngCore + CryptoRng>(
+        &self, rng: &mut R, commitment: &G1Affine, attributes: &PassportAttributes,
+    ) -> Result<BlindPassport, Error> {
+        if commitment.is_zero() { return Err(Error::InvalidIssuanceRequest); }
+        attributes.validate(&self.public.gates)?;
         let revocation = nonzero_scalar(rng);
         let mut known = BTreeMap::new();
         known.insert(IDX_KEY_ID, params::key_id_scalar(&self.public.key_id));
@@ -261,7 +263,7 @@ impl IssuerKey {
         debug_assert!(!known.contains_key(&IDX_SECRET));
         let signature = SignatureG1::<Curve>::new_with_committed_messages(
             rng,
-            &request.commitment,
+            commitment,
             known.iter().map(|(i, m)| (*i, m)).collect(),
             &self.secret,
             &self.public.params,
@@ -349,7 +351,7 @@ pub struct IssuanceRequest {
     pub(crate) key_id: KeyId,
     pub(crate) commitment: G1Affine,
     pub(crate) issuer_tag: G1Affine,
-    pub(crate) proof: Proof<Curve>,
+    pub(crate) proof: IssuanceProof,
 }
 
 impl IssuanceRequest {
@@ -372,7 +374,7 @@ impl IssuanceRequest {
         w.key_id(&self.key_id);
         w.ark(&self.commitment);
         w.ark(&self.issuer_tag);
-        w.proof(&self.proof);
+        w.ark(&self.proof);
         w.finish_public()
     }
 
@@ -382,7 +384,7 @@ impl IssuanceRequest {
         let key_id = r.key_id()?;
         let commitment = r.ark::<G1Affine>("commitment")?;
         let issuer_tag = r.ark::<G1Affine>("issuer tag")?;
-        let proof = r.proof(false)?;
+        let proof = r.issuance_proof()?;
         r.finish()?;
         if commitment.is_zero() || issuer_tag.is_zero() {
             return Err(Error::Decode("identity element"));
@@ -397,26 +399,15 @@ impl IssuanceRequest {
 
     fn verify<R: RngCore>(
         &self,
-        rng: &mut R,
+        _rng: &mut R,
         issuer: &IssuerPublicKey,
         challenge: &IssuanceChallenge,
     ) -> Result<(), Error> {
         if self.commitment.is_zero() || self.issuer_tag.is_zero() {
             return Err(Error::InvalidIssuanceRequest);
         }
-        let spec = issuance_spec(issuer, self.commitment, self.issuer_tag);
-        if !crate::proof_wire::well_formed(&self.proof, spec.statements.len(), false) {
-            return Err(Error::InvalidIssuanceRequest);
-        }
         self.proof
-            .clone()
-            .verify::<R, Blake2b512>(
-                rng,
-                spec,
-                Some(challenge.0.to_vec()),
-                VerifierConfig::default(),
-            )
-            .map_err(|_| Error::InvalidIssuanceRequest)
+            .verify(issuer, challenge, &self.commitment, &self.issuer_tag)
     }
 }
 
@@ -427,38 +418,6 @@ impl core::fmt::Debug for IssuanceRequest {
             .field("issuer_tag", &self.issuer_tag())
             .finish_non_exhaustive()
     }
-}
-
-/// Proof specification of an issuance request (same for holder and issuer):
-///
-/// 1. knowledge of `(blinding, secret)` with
-///    `commitment = h_0 * blinding + h_secret * secret`;
-/// 2. knowledge of `secret'` with `issuer_tag = T * secret'`;
-/// 3. `secret == secret'`.
-///
-/// The context binds the proof to the issuer key; the nonce (the issuer's
-/// challenge) binds it to the session.
-pub(crate) fn issuance_spec(
-    issuer: &IssuerPublicKey,
-    commitment: G1Affine,
-    issuer_tag: G1Affine,
-) -> ProofSpec<Curve> {
-    let params = issuer.signature_params();
-    let mut statements = Statements::<Curve>::new();
-    statements.add(PedersenCommitmentStmt::new_statement_from_params::<Curve>(
-        vec![params.h_0, params.h[IDX_SECRET]],
-        commitment,
-    ));
-    statements.add(PedersenCommitmentStmt::new_statement_from_params::<Curve>(
-        vec![params::issuer_tag_base()],
-        issuer_tag,
-    ));
-    let mut meta = MetaStatements::new();
-    meta.add_witness_equality(EqualWitnesses([(0, 1), (1, 0)].into_iter().collect()));
-
-    let mut context = Label::new(DOMAIN_ISSUANCE);
-    context.bytes(&issuer.to_bytes());
-    ProofSpec::new(statements, meta, vec![], Some(context.finish()))
 }
 
 /// A passport signature as returned by the issuer, still blinded.

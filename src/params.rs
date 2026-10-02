@@ -55,8 +55,6 @@ const DOMAIN_KEY_ID: &[u8] = b"cpsd/v1/key-id";
 const DOMAIN_COMMUNITY_BASE: &[u8] = b"cpsd/v1/community-pseudonym-base";
 const DOMAIN_ISSUER_TAG_BASE: &[u8] = b"cpsd/v1/issuer-tag-base";
 const DOMAIN_RANGE_PROOF: &[u8] = b"cpsd/v1/bulletproofs-plus-plus-range-proof";
-pub(crate) const DOMAIN_ISSUANCE: &[u8] = b"cpsd/v1/issuance";
-pub(crate) const DOMAIN_PRESENTATION: &[u8] = b"cpsd/v1/presentation";
 
 /// Unambiguous byte string builder for labels and proof contexts: every
 /// variable-length field is length-prefixed.

@@ -6,22 +6,16 @@ use ark_ff::Zero;
 use ark_std::UniformRand;
 use ark_std::rand::{CryptoRng, RngCore};
 use bbs_plus::signature::SignatureG1;
-use blake2::Blake2b512;
-use proof_system::{
-    proof::Proof,
-    prover::ProverConfig,
-    witness::{Witness, Witnesses},
-};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::{
     AuthenticatedCommunity, CommunityId, Error, IssuerPublicKey, KeyId, PassportAttributes,
     Presentation, Pseudonym, Timestamp,
     issuer::{
-        BlindPassport, IssuanceChallenge, IssuanceRequest, IssuerTag, issuance_spec,
-        nonzero_scalar, point_bytes,
+        BlindPassport, IssuanceChallenge, IssuanceRequest, IssuerTag, nonzero_scalar, point_bytes,
     },
     params::{self, IDX_SECRET},
+    proof::IssuanceProof,
     wire::{Kind, Reader, Writer},
 };
 
@@ -103,18 +97,15 @@ pub fn request_issue<R: RngCore + CryptoRng>(
         return Err(Error::ProofGeneration);
     }
 
-    let spec = issuance_spec(issuer, commitment, issuer_tag);
-    let mut witnesses = Witnesses::<params::Curve>::new();
-    witnesses.add(Witness::PedersenCommitment(vec![blinding, secret.0]));
-    witnesses.add(Witness::PedersenCommitment(vec![secret.0]));
-    let (proof, _) = Proof::new::<R, Blake2b512>(
+    let proof = IssuanceProof::new(
         rng,
-        spec,
-        witnesses,
-        Some(challenge.to_bytes().to_vec()),
-        ProverConfig::default(),
-    )
-    .map_err(|_| Error::ProofGeneration)?;
+        issuer,
+        challenge,
+        &commitment,
+        &issuer_tag,
+        secret.0,
+        blinding,
+    )?;
 
     let request = IssuanceRequest {
         key_id: issuer.key_id().clone(),
@@ -142,6 +133,16 @@ pub struct PendingIssuance {
 }
 
 impl PendingIssuance {
+    pub(crate) fn from_opening(secret: &HolderSecret, blinding: Fr, issuer: &IssuerPublicKey) -> Self {
+        Self { secret: secret.clone(), blinding, issuer: issuer.clone() }
+    }
+
+    pub(crate) fn issuer(&self) -> &IssuerPublicKey { &self.issuer }
+
+    pub(crate) fn belongs_to(&self, secret: &HolderSecret) -> bool {
+        self.secret.0 == secret.0
+    }
+
     /// Unblinds the issuer's answer and checks the signature over the holder
     /// secret and the signed attributes. Returns the passport.
     pub fn finish(self, blind: &BlindPassport) -> Result<Passport, Error> {

@@ -1,123 +1,123 @@
-//! Narrow wire boundary for the exact Dock proof shapes used by cpsd.
-//!
-//! Dock's general proof decoder accepts many unrelated protocols. Its range
-//! verifier also assumes particular vector dimensions. Check those dimensions
-//! before decoding; leave all scalar/group validation and crypto to Dock/ark.
-
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use proof_system::{proof::Proof, statement_proof::StatementProof};
+//! Bounded v3 wire shapes, checked before upstream vector allocation.
+//! Scalar and group validation and exact canonical encoding remain upstream.
 
 use crate::{
     Error, MAX_GATES,
-    params::Curve,
+    proof::{IssuanceProof, PresentationProof, RangeProof},
     wire::{Reader, Writer},
 };
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 impl Writer {
-    pub(crate) fn proof(&mut self, proof: &Proof<Curve>) {
-        self.u16(proof.statement_proofs.len() as u16);
-        for statement in &proof.statement_proofs {
-            self.ark(statement);
+    pub(crate) fn proof(&mut self, proof: &PresentationProof) {
+        self.ark(&proof.signature);
+        self.ark(&proof.pseudonym);
+        self.u16(proof.ranges.len() as u16);
+        for range in &proof.ranges {
+            self.ark(range);
         }
     }
 }
 
 impl Reader<'_> {
-    pub(crate) fn proof(&mut self, presentation: bool) -> Result<Proof<Curve>, Error> {
+    pub(crate) fn issuance_proof(&mut self) -> Result<IssuanceProof, Error> {
+        let raw = self.bytes()?;
+        if raw.len() != 192 {
+            return Err(Error::Decode("issuance proof shape"));
+        }
+        decode(raw)
+    }
+
+    pub(crate) fn proof(&mut self) -> Result<PresentationProof, Error> {
+        let raw = self.bytes()?;
+        signature_shape(raw)?;
+        let signature = decode(raw)?;
+        let raw = self.bytes()?;
+        if raw.len() != 80 {
+            return Err(Error::Decode("pseudonym proof shape"));
+        }
+        let pseudonym = decode(raw)?;
         let count = self.u16()? as usize;
-        if (presentation && !(2..=3 + MAX_GATES).contains(&count)) || (!presentation && count != 2)
-        {
+        if count > 1 + MAX_GATES {
             return Err(Error::Decode("proof count"));
         }
-        let mut statements = Vec::with_capacity(count);
-        for index in 0..count {
+        let mut ranges = Vec::with_capacity(count);
+        for _ in 0..count {
             let raw = self.bytes()?;
-            check_shape(raw, presentation, index)?;
-            let mut field = raw;
-            let statement = StatementProof::<Curve>::deserialize_compressed(&mut field)
-                .map_err(|_| Error::Decode("proof"))?;
-            // Also reject duplicate or out-of-order map entries, which ark's
-            // generic BTreeMap decoder otherwise normalizes silently.
-            let mut canonical = Vec::new();
-            statement
-                .serialize_compressed(&mut canonical)
-                .map_err(|_| Error::Decode("proof"))?;
-            if !field.is_empty() || canonical != raw {
-                return Err(Error::Decode("noncanonical proof"));
-            }
-            statements.push(statement);
+            range_shape(raw)?;
+            ranges.push(decode::<RangeProof>(raw)?);
         }
-        Ok(Proof {
-            statement_proofs: statements,
-            aggregated_groth16: None,
-            aggregated_legogroth16: None,
+        Ok(PresentationProof {
+            signature,
+            pseudonym,
+            ranges,
         })
     }
 }
 
-/// Validate in-memory proofs too, including adversarial tests bypassing the wire.
-pub(crate) fn well_formed(proof: &Proof<Curve>, count: usize, presentation: bool) -> bool {
-    proof.statement_proofs.len() == count
-        && proof.aggregated_groth16.is_none()
-        && proof.aggregated_legogroth16.is_none()
-        && proof
-            .statement_proofs
-            .iter()
-            .enumerate()
-            .all(|(i, statement)| {
-                let mut raw = Vec::new();
-                statement.serialize_compressed(&mut raw).is_ok()
-                    && check_shape(&raw, presentation, i).is_ok()
-            })
+fn decode<T: CanonicalDeserialize + CanonicalSerialize>(raw: &[u8]) -> Result<T, Error> {
+    let mut field = raw;
+    let value = T::deserialize_compressed(&mut field).map_err(|_| Error::Decode("proof"))?;
+    let mut canonical = Vec::with_capacity(raw.len());
+    value
+        .serialize_compressed(&mut canonical)
+        .map_err(|_| Error::Decode("proof"))?;
+    if !field.is_empty() || canonical != raw {
+        return Err(Error::Decode("noncanonical proof"));
+    }
+    Ok(value)
 }
 
-fn check_shape(raw: &[u8], presentation: bool, index: usize) -> Result<(), Error> {
+/// Check hostile in-memory values as strictly as the untrusted decoder.
+pub(crate) fn well_formed(proof: &PresentationProof, ranges: usize) -> bool {
+    if proof.ranges.len() != ranges || ranges > 1 + MAX_GATES {
+        return false;
+    }
+    let mut raw = Vec::new();
+    if proof.signature.serialize_compressed(&mut raw).is_err() || signature_shape(&raw).is_err() {
+        return false;
+    }
+    proof.ranges.iter().all(|range| {
+        raw.clear();
+        range.serialize_compressed(&mut raw).is_ok() && range_shape(&raw).is_ok()
+    })
+}
+
+fn signature_shape(raw: &[u8]) -> Result<(), Error> {
     let mut c = Shape(raw);
-    if index == 0 && presentation {
-        c.literal(&[0])?; // PoKBBSSignatureG1
-        c.skip(5 * 48 + 2 * 32)?;
-        c.literal(&[1])?; // full Schnorr responses; no partial alternative
-        let count = c.length()?;
-        if !(4..=5 + MAX_GATES).contains(&count) {
-            return Err(Error::Decode("signature responses"));
-        }
-        c.skip(count * 32)?;
-        c.literal(&[0])?;
-    } else if index == 0 {
-        c.literal(&[3])?; // PedersenCommitment, blinding and secret
-        c.skip(48)?;
-        c.vector(2, 32)?;
-    } else if index == 1 {
-        c.literal(&[32])?; // PedersenCommitmentPartial, response supplied by statement 0
-        c.skip(48)?;
-        c.integer(0)?;
-        c.integer(1)?;
-    } else {
-        c.literal(&[12])?; // BoundCheckBpp
-        c.vector(2, 48)?; // transformed lower/upper commitments
-        c.literal(&2u16.to_le_bytes())?; // base 2, fixed 64-bit setup
-        c.skip(4 * 48)?;
-        // log2(128 generators) folds; one final scalar per argument.
-        c.vector(7, 48)?;
-        c.vector(7, 48)?;
-        c.vector(1, 32)?;
-        c.vector(1, 32)?;
-        for _ in 0..2 {
-            c.skip(48)?;
-            c.integer(1)?; // response map has only blinding at index 1
-            c.integer(1)?;
-            c.skip(32)?;
-            c.integer(2)?;
-        }
+    c.skip(5 * 48 + 2 * 32)?;
+    c.literal(&[1])?; // Only complete responses; no optional partial map.
+    let count = c.length()?;
+    if !(4..=5 + MAX_GATES).contains(&count) {
+        return Err(Error::Decode("signature responses"));
     }
-    if !c.0.is_empty() {
-        return Err(Error::Decode("proof shape"));
-    }
-    Ok(())
+    c.skip(count * 32)?;
+    c.literal(&[0])?;
+    c.finish()
+}
+
+fn range_shape(raw: &[u8]) -> Result<(), Error> {
+    let mut c = Shape(raw);
+    c.vector(2, 48)?;
+    c.literal(&2u16.to_le_bytes())?; // Fixed base 2 and 64-bit setup.
+    c.skip(4 * 48)?;
+    c.vector(7, 48)?;
+    c.vector(7, 48)?;
+    c.vector(1, 32)?;
+    c.vector(1, 32)?;
+    c.skip(2 * (48 + 2 * 32))?; // Two full Pedersen proofs.
+    c.finish()
 }
 
 struct Shape<'a>(&'a [u8]);
 impl Shape<'_> {
+    fn finish(self) -> Result<(), Error> {
+        if self.0.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Decode("proof shape"))
+        }
+    }
     fn skip(&mut self, n: usize) -> Result<(), Error> {
         self.0 = self.0.get(n..).ok_or(Error::Decode("proof shape"))?;
         Ok(())

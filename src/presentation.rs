@@ -6,31 +6,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use ark_bls12_381::{Fr, G1Affine};
 use ark_ec::AffineRepr;
 use ark_std::rand::{CryptoRng, RngCore};
-use blake2::Blake2b512;
-use proof_system::{
-    meta_statement::{EqualWitnesses, MetaStatements},
-    proof::Proof,
-    proof_spec::ProofSpec,
-    prover::ProverConfig,
-    setup_params::SetupParams,
-    statement::{
-        Statements,
-        bbs_plus::{PoKBBSSignatureG1Prover, PoKBBSSignatureG1Verifier},
-        bound_check_bpp::BoundCheckBpp as BoundCheckBppStmt,
-        ped_comm::PedersenCommitment as PedersenCommitmentStmt,
-    },
-    verifier::VerifierConfig,
-    witness::{PoKBBSSignatureG1 as PoKBBSSignatureG1Wit, Witness, Witnesses},
-};
 
 use crate::{
-    CommunityId, Error, GateId, IssuerPublicKey, KeyId, MAX_GATES, Passport, TIME_LIMIT, Timestamp,
+    CommunityId, Error, GateId, IssuerPublicKey, KeyId, MAX_GATES, Passport, Timestamp,
     attributes::check_timestamp,
     issuer::point_bytes,
-    params::{
-        self, Curve, DOMAIN_PRESENTATION, IDX_EPOCH, IDX_FIRST_GATE, IDX_KEY_ID, IDX_SECRET,
-        IDX_VALID_UNTIL, Label,
-    },
+    params::{self, IDX_EPOCH, IDX_FIRST_GATE, IDX_KEY_ID, IDX_VALID_UNTIL},
+    proof::PresentationProof,
     wire::{Kind, Reader, Writer, hex},
 };
 
@@ -48,7 +30,7 @@ impl Pseudonym {
         Self(point_bytes(&p))
     }
 
-    fn point(&self) -> Result<G1Affine, Error> {
+    pub(crate) fn point(&self) -> Result<G1Affine, Error> {
         decode_point(&self.0)
     }
 
@@ -245,22 +227,6 @@ impl PresentationRequest {
             request.with_epoch_expiry(epoch_expiry)
         }
     }
-
-    /// Proof context: everything the proof must be bound to besides the
-    /// challenge (which goes in as the nonce).
-    fn context(&self, issuer: &IssuerPublicKey) -> Vec<u8> {
-        let mut label = Label::new(DOMAIN_PRESENTATION);
-        label.bytes(&issuer.to_bytes());
-        label.bytes(self.community.as_bytes());
-        label.u64(self.policy_epoch);
-        label.u64(self.now);
-        label.u64(self.epoch_expiry.unwrap_or(0));
-        label.u64(self.required_gates.len() as u64);
-        for gate in &self.required_gates {
-            label.bytes(gate.as_str().as_bytes());
-        }
-        label.finish()
-    }
 }
 
 impl core::fmt::Debug for PresentationRequest {
@@ -292,7 +258,7 @@ impl core::fmt::Debug for PresentationRequest {
 pub struct Presentation {
     key_id: KeyId,
     pub(crate) pseudonym: Pseudonym,
-    pub(crate) proof: Proof<Curve>,
+    pub(crate) proof: PresentationProof,
 }
 
 impl Presentation {
@@ -321,7 +287,7 @@ impl Presentation {
         let mut r = Reader::new(bytes, Kind::Presentation)?;
         let key_id = r.key_id()?;
         let pseudonym = Pseudonym::from_bytes(&r.fixed::<48>()?)?;
-        let proof = r.proof(true)?;
+        let proof = r.proof()?;
         r.finish()?;
         Ok(Self {
             key_id,
@@ -338,12 +304,6 @@ impl core::fmt::Debug for Presentation {
             .field("pseudonym", &self.pseudonym)
             .finish_non_exhaustive()
     }
-}
-
-/// Which side builds the proof specification.
-pub(crate) enum Side {
-    Prover,
-    Verifier,
 }
 
 pub(crate) fn revealed_messages(
@@ -363,84 +323,19 @@ pub(crate) fn revealed_messages(
     Ok(revealed)
 }
 
-/// Proof specification of a presentation. Statements:
-///
-/// 0. proof of knowledge of the BBS+ signature, revealing key ID and epoch;
-/// 1. knowledge of `s` with `pseudonym = H(community) * s`;
-///
-/// The shared-epoch profile reveals the already-known common expiry in
-/// statement 0. The independent profile additionally uses:
-///
-/// 2. `now <= valid_until < TIME_LIMIT` (Bulletproofs++);
-/// 3. + i: `now <= expiry(gate_i) < TIME_LIMIT` for each requested gate.
-///
-/// Witness equalities tie the secret, `valid_until` and the gate expiries to
-/// the signed messages.
-pub(crate) fn presentation_spec(
+/// Exact signed message indices required by the independent-expiry profile.
+pub(crate) fn ranged_messages(
     issuer: &IssuerPublicKey,
     request: &PresentationRequest,
-    pseudonym: G1Affine,
-    side: Side,
-) -> Result<ProofSpec<Curve>, Error> {
-    let revealed = revealed_messages(issuer, request)?;
-
-    let sig_params = issuer.signature_params().clone();
-    let mut statements = Statements::<Curve>::new();
-    statements.add(match side {
-        Side::Prover => PoKBBSSignatureG1Prover::new_statement_from_params(sig_params, revealed),
-        Side::Verifier => PoKBBSSignatureG1Verifier::new_statement_from_params(
-            sig_params,
-            issuer.bbs_public_key().clone(),
-            revealed,
-        ),
-    });
-    statements.add(PedersenCommitmentStmt::new_statement_from_params::<Curve>(
-        vec![params::community_base(&request.community)],
-        pseudonym,
-    ));
-
-    let mut meta = MetaStatements::new();
-    meta.add_witness_equality(EqualWitnesses(
-        [(0, IDX_SECRET), (1, 0)].into_iter().collect(),
-    ));
-
+) -> Result<Vec<usize>, Error> {
     if request.epoch_expiry.is_some() {
-        return Ok(ProofSpec::new(
-            statements,
-            meta,
-            vec![],
-            Some(request.context(issuer)),
-        ));
+        return Ok(Vec::new());
     }
-
-    // Range proofs; all share setup parameter 0.
     let mut ranged = vec![IDX_VALID_UNTIL];
     for gate in &request.required_gates {
         ranged.push(IDX_FIRST_GATE + issuer.gate_slot(gate)?);
     }
-    for message in ranged {
-        let index = statements.add(
-            BoundCheckBppStmt::<G1Affine>::new_statement_from_params_ref::<Curve>(
-                request.now,
-                TIME_LIMIT,
-                0,
-            )
-            .map_err(|_| Error::ProofGeneration)?,
-        );
-        meta.add_witness_equality(EqualWitnesses(
-            [(0, message), (index, 0)].into_iter().collect(),
-        ));
-    }
-
-    let setup = vec![SetupParams::BppSetupParams(
-        params::range_proof_params().clone(),
-    )];
-    Ok(ProofSpec::new(
-        statements,
-        meta,
-        setup,
-        Some(request.context(issuer)),
-    ))
+    Ok(ranged)
 }
 
 /// Authenticate a community-signed request against the wallet's origin-pinned
@@ -466,6 +361,11 @@ pub(crate) fn present_checked<R: RngCore + CryptoRng>(
     passport: &Passport,
     request: &PresentationRequest,
 ) -> Result<Presentation, Error> {
+    check_request(passport, request)?;
+    prove(rng, passport, request)
+}
+
+pub(crate) fn check_request(passport: &Passport, request: &PresentationRequest) -> Result<(), Error> {
     let attributes = passport.attributes();
     let issuer = passport.issuer();
     if attributes.policy_epoch != request.policy_epoch {
@@ -493,7 +393,7 @@ pub(crate) fn present_checked<R: RngCore + CryptoRng>(
     {
         return Err(Error::WrongExpiryCohort);
     }
-    prove(rng, passport, request)
+    Ok(())
 }
 
 /// Builds the proof without the holder-side checks of [`present`]. For a
@@ -506,38 +406,7 @@ pub(crate) fn prove<R: RngCore + CryptoRng>(
 ) -> Result<Presentation, Error> {
     let issuer = passport.issuer();
     let pseudonym = passport.pseudonym(&request.community);
-    let spec = presentation_spec(issuer, request, pseudonym.point()?, Side::Prover)?;
-
-    let messages = passport.messages();
-    let revealed = revealed_messages(issuer, request)?;
-    let unrevealed: BTreeMap<usize, Fr> = messages
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| !revealed.contains_key(i))
-        .map(|(i, m)| (i, *m))
-        .collect();
-    let mut witnesses = Witnesses::<Curve>::new();
-    witnesses.add(PoKBBSSignatureG1Wit::new_as_witness(
-        passport.signature.clone(),
-        unrevealed,
-    ));
-    witnesses.add(Witness::PedersenCommitment(vec![passport.secret.0]));
-    if request.epoch_expiry.is_none() {
-        witnesses.add(Witness::BoundCheckBpp(messages[IDX_VALID_UNTIL]));
-        for gate in &request.required_gates {
-            let slot = IDX_FIRST_GATE + issuer.gate_slot(gate)?;
-            witnesses.add(Witness::BoundCheckBpp(messages[slot]));
-        }
-    }
-
-    let (proof, _) = Proof::new::<R, Blake2b512>(
-        rng,
-        spec,
-        witnesses,
-        Some(request.challenge.to_vec()),
-        ProverConfig::default(),
-    )
-    .map_err(|_| Error::ProofGeneration)?;
+    let proof = PresentationProof::new(rng, passport, request, &pseudonym.point()?)?;
     Ok(Presentation {
         key_id: issuer.key_id().clone(),
         pseudonym,
@@ -552,7 +421,7 @@ pub(crate) fn prove<R: RngCore + CryptoRng>(
 /// old keys whose passports have not expired yet). The verifier must use the
 /// request it created and stored, never one received from the holder.
 pub fn verify<R: RngCore + CryptoRng>(
-    rng: &mut R,
+    _rng: &mut R,
     issuers: &[IssuerPublicKey],
     request: &PresentationRequest,
     presentation: &Presentation,
@@ -568,24 +437,8 @@ pub fn verify<R: RngCore + CryptoRng>(
         issuer.gate_slot(gate)?;
     }
 
-    let spec = presentation_spec(
-        issuer,
-        request,
-        presentation.pseudonym.point()?,
-        Side::Verifier,
-    )?;
-    if !crate::proof_wire::well_formed(&presentation.proof, spec.statements.len(), true) {
-        return Err(Error::InvalidProof);
-    }
     presentation
         .proof
-        .clone()
-        .verify::<R, Blake2b512>(
-            rng,
-            spec,
-            Some(request.challenge.to_vec()),
-            VerifierConfig::default(),
-        )
-        .map_err(|_| Error::InvalidProof)?;
+        .verify(issuer, request, &presentation.pseudonym.point()?)?;
     Ok(presentation.pseudonym)
 }

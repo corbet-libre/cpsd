@@ -1,0 +1,26 @@
+schema = 1
+project = "cpsd"
+
+[checks.resolve]
+kind = "commands"
+commands = [["bash", ".ci/check.sh", "resolve"]]
+
+[checks.native]
+kind = "commands"
+commands = [["bash", ".ci/check.sh", "native"]]
+
+[checks.wasm]
+kind = "commands"
+commands = [["bash", ".ci/check.sh", "wasm"]]
+
+[checks.dependency-policy]
+kind = "commands"
+commands = [["bash", ".ci/check.sh", "dependency-policy"]]
+
+[checks.acceptance-preflight]
+kind = "commands"
+commands = [["python3", ".ci/acceptance.py", "preflight"]]
+
+[checks.acceptance]
+kind = "commands"
+commands = [["python3", ".ci/acceptance.py", "run"]]
