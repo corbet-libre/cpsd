@@ -17,6 +17,10 @@ commands = [["bash", ".ci/check.sh", "wasm"]]
 kind = "commands"
 commands = [["bash", ".ci/browser-diagnostic.sh"]]
 
+[checks.coverage-diagnostic]
+kind = "commands"
+commands = [["bash", ".ci/coverage-diagnostic.sh"]]
+
 [checks.dependency-policy]
 kind = "commands"
 commands = [["bash", ".ci/check.sh", "dependency-policy"]]

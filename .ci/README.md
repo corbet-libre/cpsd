@@ -46,3 +46,14 @@ identities, actual tool versions, browser log and its own distinctly named recei
 It uses the already-qualified immutable browser supplement and two jobs/threads.
 It does not run the full coverage, fuzz or dependency-policy union and cannot
 produce an owner/full acceptance receipt.
+
+`coverage-diagnostic` binds the same executed native implementation and both
+retained locks, then calls the original coverage selector through the existing
+nightly helper. The unchanged parser requires every emitted production line and
+branch. The command group is bounded to1800seconds plus15seconds termination grace.
+It retains original JSON/LCOV/text reports and logs outside source, with
+a distinctly named diagnostic receipt on success or failure; an original gate
+failure still exits unsuccessfully. Original instrumented native tests also
+write their real public root-board codec seeds into that artifact directory.
+Corpus generation alone is not fuzz execution. This selector does not run or
+replace the remaining fixed acceptance phases or the aggregate resolver.
