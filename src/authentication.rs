@@ -43,11 +43,15 @@ impl AuthenticatedCommunity {
     /// Verify a csgn COSE Credential whose payload is exactly a root-board
     /// issuance context, signed by the ROOT community's key ring this value
     /// was imported for. The same exclusive-expiry rule applies: the COSE expiry
-    /// is the context deadline plus one second. The source community inside the
-    /// context is only a request scope; authority comes from this root ring.
+    /// is the context deadline plus one second. Independently authenticate the
+    /// original source request against its caller-pinned source mapping, then
+    /// require the entire request to equal the one inside the root context.
+    /// Root authority cannot select a different source pseudonym scope.
     pub fn authenticate_root_board_issuance(
         &self,
         cose: &[u8],
+        expected_source: &AuthenticatedCommunity,
+        signed_source_request: &[u8],
         now: Timestamp,
     ) -> Result<RootBoardIssuanceContext, Error> {
         let (payload, valid_until) = self.verified_payload(cose, now)?;
@@ -57,6 +61,10 @@ impl AuthenticatedCommunity {
             || now > context.deadline()
             || valid_until != context.deadline() + 1
         {
+            return Err(Error::InvalidPresentationRequest);
+        }
+        let source = expected_source.authenticate(signed_source_request, now)?;
+        if context.source_request() != &source {
             return Err(Error::InvalidPresentationRequest);
         }
         Ok(context)

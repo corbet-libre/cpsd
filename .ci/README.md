@@ -30,3 +30,19 @@ workflow still requires the independently qualified two-lock ccid revision and
 its exact artifact receipts. No local builds or independent job dispatch are
 permitted. The existing `resolve,native`, `wasm`, and `dependency-policy` selectors
 remain diagnostic only; resolve retains files and hashes, never base64 stdout.
+
+`browser-diagnostic` reuses the original matching upstream runner acquisition and
+browser selector without invoking the unresolved full-acceptance workflow. It
+requires the exact root/fuzz locks and implementation inventory from the retained
+executed native vector reference, runs the original release-profile browser tests
+(including root-board vectors and existing proof timing assertions), and compares
+all three actual browser proof hashes to that native reference. The checked-in
+reference contains public deterministic hashes, source identity and lock hashes;
+it is not a substitute for executing the browser tests. Any source or lock change
+requires a newly reviewed executed native reference.
+
+The diagnostic retains both locks, upstream runner archive/checksum/binary
+identities, actual tool versions, browser log and its own distinctly named receipt.
+It uses the already-qualified immutable browser supplement and two jobs/threads.
+It does not run the full coverage, fuzz or dependency-policy union and cannot
+produce an owner/full acceptance receipt.

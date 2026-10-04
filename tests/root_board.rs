@@ -36,6 +36,8 @@ struct World {
     descriptor: RootBoardPublicKey,
     signer: csgn::Signer,
     expected: AuthenticatedCommunity,
+    source_signer: csgn::Signer,
+    expected_source: AuthenticatedCommunity,
 }
 
 fn world() -> World {
@@ -57,6 +59,12 @@ fn world() -> World {
         0,
     )
     .unwrap();
+    let source = CommunityId::new(b"community-a").unwrap();
+    let source_signer = signer(7);
+    let expected_source = AuthenticatedCommunity::from_authenticated_origin(
+        source.clone(),
+        source_signer.key_ring().clone(),
+    );
     let signer = signer(5);
     let expected = AuthenticatedCommunity::from_authenticated_origin(
         root_community.clone(),
@@ -68,10 +76,12 @@ fn world() -> World {
         global,
         root_key,
         root_community,
-        source: CommunityId::new(b"community-a").unwrap(),
+        source,
         descriptor,
         signer,
         expected,
+        source_signer,
+        expected_source,
     }
 }
 
@@ -106,16 +116,29 @@ impl World {
         RootBoardIssuanceContext::new(&mut self.rng, source, self.descriptor.clone()).unwrap()
     }
 
-    fn signed_context(&mut self, context: &RootBoardIssuanceContext) -> Vec<u8> {
-        sign(&mut self.signer, &context.to_bytes(), context.deadline())
+    fn signed_context(&mut self, context: &RootBoardIssuanceContext) -> (Vec<u8>, Vec<u8>) {
+        let root = sign(&mut self.signer, &context.to_bytes(), context.deadline());
+        let source = sign(
+            &mut self.source_signer,
+            &context.source_request().to_bytes(),
+            context.deadline(),
+        );
+        (root, source)
     }
 
     /// Run one complete honest issuance, returning the answer for inspection.
     fn issue(&mut self, holder: &mut OpaqueHolder) -> BlindRootBoardCredential {
         let context = self.context();
-        let signed = self.signed_context(&context);
+        let (signed, signed_source) = self.signed_context(&context);
         let request = holder
-            .begin_root_board_issuance(&mut self.rng, &self.expected, &signed, NOW)
+            .begin_root_board_issuance(
+                &mut self.rng,
+                &self.expected,
+                &signed,
+                &self.expected_source,
+                &signed_source,
+                NOW,
+            )
             .unwrap();
         let request = RootBoardIssuanceRequest::from_bytes(&request.to_bytes()).unwrap();
         let verified = verify_root_board_issuance(
@@ -166,9 +189,16 @@ fn issuance_seal_restore_and_joint_presentation_use_one_hidden_secret() {
     let reopened = w.holder();
     // No passport, no root issuance and no root presentation.
     let context = w.context();
-    let signed = w.signed_context(&context);
+    let (signed, signed_source) = w.signed_context(&context);
     assert!(matches!(
-        holder.begin_root_board_issuance(&mut w.rng, &w.expected, &signed, NOW),
+        holder.begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &signed,
+            &w.expected_source,
+            &signed_source,
+            NOW
+        ),
         Err(Error::PassportUnavailable)
     ));
     let (request, signed_request) = w.request();
@@ -186,12 +216,26 @@ fn issuance_seal_restore_and_joint_presentation_use_one_hidden_secret() {
     // The pending root opening survives a sealed restart and a second begin is
     // refused until it finishes or is cancelled.
     let context = w.context();
-    let signed = w.signed_context(&context);
+    let (signed, signed_source) = w.signed_context(&context);
     let issuance = holder
-        .begin_root_board_issuance(&mut w.rng, &w.expected, &signed, NOW)
+        .begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &signed,
+            &w.expected_source,
+            &signed_source,
+            NOW,
+        )
         .unwrap();
     assert!(matches!(
-        holder.begin_root_board_issuance(&mut w.rng, &w.expected, &signed, NOW),
+        holder.begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &signed,
+            &w.expected_source,
+            &signed_source,
+            NOW
+        ),
         Err(Error::IssuancePending)
     ));
     let verified =
@@ -309,9 +353,16 @@ fn failed_renewal_keeps_the_previous_credential_and_success_replaces_it() {
     )
     .unwrap();
     let other_context = RootBoardIssuanceContext::new(&mut w.rng, other_source, other).unwrap();
-    let signed = w.signed_context(&other_context);
+    let (signed, signed_source) = w.signed_context(&other_context);
     holder
-        .begin_root_board_issuance(&mut w.rng, &w.expected, &signed, NOW)
+        .begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &signed,
+            &w.expected_source,
+            &signed_source,
+            NOW,
+        )
         .unwrap();
     assert!(matches!(
         holder.finish_root_board_issuance(&renewal),
@@ -330,9 +381,16 @@ fn failed_renewal_keeps_the_previous_credential_and_success_replaces_it() {
 
     // Cancelling drops only the pending opening.
     let context = w.context();
-    let signed = w.signed_context(&context);
+    let (signed, signed_source) = w.signed_context(&context);
     holder
-        .begin_root_board_issuance(&mut w.rng, &w.expected, &signed, NOW)
+        .begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &signed,
+            &w.expected_source,
+            &signed_source,
+            NOW,
+        )
         .unwrap();
     holder.cancel_root_board_issuance();
     holder.cancel_root_board_issuance();
@@ -353,7 +411,7 @@ fn only_the_root_scope_authenticates_issuance_contexts_and_requests() {
     let mut holder = w.holder();
     w.passport(&mut holder);
     let context = w.context();
-    let good = w.signed_context(&context);
+    let (good, signed_source) = w.signed_context(&context);
     let wrong_ring = AuthenticatedCommunity::from_authenticated_origin(
         w.root_community.clone(),
         signer(6).key_ring().clone(),
@@ -364,19 +422,40 @@ fn only_the_root_scope_authenticates_issuance_contexts_and_requests() {
     );
     for expected in [&wrong_ring, &wrong_scope] {
         assert!(matches!(
-            holder.begin_root_board_issuance(&mut w.rng, expected, &good, NOW),
+            holder.begin_root_board_issuance(
+                &mut w.rng,
+                expected,
+                &good,
+                &w.expected_source,
+                &signed_source,
+                NOW
+            ),
             Err(Error::InvalidPresentationRequest)
         ));
     }
     // Exclusive COSE expiry must equal the inclusive deadline plus one second.
     let skewed = sign(&mut w.signer, &context.to_bytes(), context.deadline() + 5);
     assert!(matches!(
-        holder.begin_root_board_issuance(&mut w.rng, &w.expected, &skewed, NOW),
+        holder.begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &skewed,
+            &w.expected_source,
+            &signed_source,
+            NOW
+        ),
         Err(Error::InvalidPresentationRequest)
     ));
     // Past the deadline, unknown payloads and oversized input all refuse.
     assert!(matches!(
-        holder.begin_root_board_issuance(&mut w.rng, &w.expected, &good, NOW + 1),
+        holder.begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &good,
+            &w.expected_source,
+            &signed_source,
+            NOW + 1
+        ),
         Err(Error::InvalidPresentationRequest)
     ));
     let (request, signed_request) = w.request();
@@ -386,11 +465,25 @@ fn only_the_root_scope_authenticates_issuance_contexts_and_requests() {
         request.deadline(),
     );
     assert!(matches!(
-        holder.begin_root_board_issuance(&mut w.rng, &w.expected, &plain, NOW),
+        holder.begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &plain,
+            &w.expected_source,
+            &signed_source,
+            NOW
+        ),
         Err(Error::InvalidPresentationRequest)
     ));
     assert!(matches!(
-        holder.begin_root_board_issuance(&mut w.rng, &w.expected, &vec![0; 256 * 1024 + 1], NOW),
+        holder.begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &vec![0; 256 * 1024 + 1],
+            &w.expected_source,
+            &signed_source,
+            NOW
+        ),
         Err(Error::InvalidPresentationRequest)
     ));
     // A root request needs a retained root credential and the matching ring.
@@ -424,4 +517,363 @@ fn only_the_root_scope_authenticates_issuance_contexts_and_requests() {
     let decoded_error = RootBoardPresentation::from_bytes(&[]);
     assert!(decoded_error.is_err());
     assert!(!Error::InvalidRootBoard.to_string().is_empty());
+}
+
+fn assert_source_refused(
+    w: &mut World,
+    holder: &mut OpaqueHolder,
+    root: &[u8],
+    source: &[u8],
+    now: Timestamp,
+) {
+    // The public authenticator must enforce the same boundary as the holder.
+    assert!(matches!(
+        w.expected
+            .authenticate_root_board_issuance(root, &w.expected_source, source, now),
+        Err(Error::InvalidPresentationRequest)
+    ));
+    assert!(matches!(
+        holder.begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            root,
+            &w.expected_source,
+            source,
+            now
+        ),
+        Err(Error::InvalidPresentationRequest)
+    ));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn root_authority_cannot_substitute_any_part_of_the_source_request() {
+    let mut w = world();
+    let mut holder = w.holder();
+    w.passport(&mut holder);
+    let context = w.context();
+    let (root, source) = w.signed_context(&context);
+    let original = w.expected_source.authenticate(&source, NOW).unwrap();
+    assert!(original == *context.source_request());
+    let mut other_challenge = original.challenge();
+    other_challenge[0] ^= 1;
+    // Each root context has a genuine root signature, but changes exactly one
+    // source field. Even a trusted root cannot choose an unrelated source Y or
+    // replace a nonce/profile inside an otherwise matching source-X request.
+    for (community, epoch, gates, deadline, expiry, challenge) in [
+        (
+            CommunityId::new(b"community-b").unwrap(),
+            7,
+            vec![w.phone.clone()],
+            NOW,
+            Some(EXPIRY),
+            original.challenge(),
+        ),
+        (
+            w.source.clone(),
+            8,
+            vec![w.phone.clone()],
+            NOW,
+            Some(EXPIRY),
+            original.challenge(),
+        ),
+        (
+            w.source.clone(),
+            7,
+            vec![],
+            NOW,
+            Some(EXPIRY),
+            original.challenge(),
+        ),
+        (
+            w.source.clone(),
+            7,
+            vec![w.phone.clone()],
+            NOW + 1,
+            Some(EXPIRY),
+            original.challenge(),
+        ),
+        (
+            w.source.clone(),
+            7,
+            vec![w.phone.clone()],
+            NOW,
+            None,
+            original.challenge(),
+        ),
+        (
+            w.source.clone(),
+            7,
+            vec![w.phone.clone()],
+            NOW,
+            Some(EXPIRY + 1),
+            original.challenge(),
+        ),
+        (
+            w.source.clone(),
+            7,
+            vec![w.phone.clone()],
+            NOW,
+            Some(EXPIRY),
+            other_challenge,
+        ),
+    ] {
+        let mut substituted =
+            PresentationRequest::with_challenge(community, epoch, gates, deadline, challenge)
+                .unwrap();
+        if let Some(expiry) = expiry {
+            substituted = substituted.with_epoch_expiry(expiry).unwrap();
+        }
+        assert!(substituted != original);
+        let changed =
+            RootBoardIssuanceContext::new(&mut w.rng, substituted, w.descriptor.clone()).unwrap();
+        let signed = sign(&mut w.signer, &changed.to_bytes(), changed.deadline());
+        assert_source_refused(&mut w, &mut holder, &signed, &source, NOW);
+    }
+    // Refusals installed no pending opening; the original dual authorization
+    // still authenticates and produces a proof for the original source scope.
+    assert!(
+        w.expected
+            .authenticate_root_board_issuance(&root, &w.expected_source, &source, NOW)
+            .unwrap()
+            == context
+    );
+    let request = holder
+        .begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &root,
+            &w.expected_source,
+            &source,
+            NOW,
+        )
+        .unwrap();
+    let verified =
+        verify_root_board_issuance(&[w.global.public_key().clone()], &context, &request, NOW)
+            .unwrap();
+    assert_eq!(verified.source_pseudonym(), holder.pseudonym(&w.source));
+    let blind =
+        issue_blind_root_board(&mut w.rng, &w.root_key, &w.descriptor, verified, NOW).unwrap();
+    holder.finish_root_board_issuance(&blind).unwrap();
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn source_authentication_refusals_preserve_renewal_and_pending_state() {
+    let mut w = world();
+    let mut holder = w.holder();
+    w.passport(&mut holder);
+    let first = w.issue(&mut holder);
+    holder.finish_root_board_issuance(&first).unwrap();
+    let context = w.context();
+    let (root, source) = w.signed_context(&context);
+    let payload = context.source_request().to_bytes();
+    // Missing/unsigned input, a root signature substituted for the source,
+    // a foreign source key, and both expired and incorrectly bounded COSE.
+    for rejected in [
+        vec![],
+        payload.clone(),
+        sign(&mut w.signer, &payload, NOW),
+        sign(&mut signer(9), &payload, NOW),
+        sign(&mut w.source_signer, &payload, NOW - 1),
+        sign(&mut w.source_signer, &payload, NOW + 1),
+    ] {
+        assert!(w.expected_source.authenticate(&rejected, NOW).is_err());
+        assert_source_refused(&mut w, &mut holder, &root, &rejected, NOW);
+    }
+    assert_source_refused(&mut w, &mut holder, &root, &source, NOW + 1);
+    let wrong_scope = AuthenticatedCommunity::from_authenticated_origin(
+        CommunityId::new(b"community-b").unwrap(),
+        w.source_signer.key_ring().clone(),
+    );
+    let wrong_ring = AuthenticatedCommunity::from_authenticated_origin(
+        w.source.clone(),
+        signer(9).key_ring().clone(),
+    );
+    for expected_source in [&wrong_scope, &wrong_ring, &w.expected] {
+        assert!(matches!(
+            w.expected
+                .authenticate_root_board_issuance(&root, expected_source, &source, NOW),
+            Err(Error::InvalidPresentationRequest)
+        ));
+        assert!(matches!(
+            holder.begin_root_board_issuance(
+                &mut w.rng,
+                &w.expected,
+                &root,
+                expected_source,
+                &source,
+                NOW
+            ),
+            Err(Error::InvalidPresentationRequest)
+        ));
+    }
+    let (request, signed_request) = w.request();
+    let proof = holder
+        .present_root_board(&mut w.rng, &w.expected, &signed_request, NOW)
+        .unwrap();
+    verify_root_board(&[w.global.public_key().clone()], &request, &proof, NOW).unwrap();
+    // Honest renewal can still start. An intervening rejected begin must not
+    // consume that pending opening or remove the already installed credential.
+    let renewal = w.issue(&mut holder);
+    assert!(matches!(
+        holder.begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &root,
+            &w.expected_source,
+            &[],
+            NOW
+        ),
+        Err(Error::IssuancePending)
+    ));
+    let proof = holder
+        .present_root_board(&mut w.rng, &w.expected, &signed_request, NOW)
+        .unwrap();
+    verify_root_board(&[w.global.public_key().clone()], &request, &proof, NOW).unwrap();
+    holder.finish_root_board_issuance(&renewal).unwrap();
+    let proof = holder
+        .present_root_board(&mut w.rng, &w.expected, &signed_request, NOW)
+        .unwrap();
+    verify_root_board(&[w.global.public_key().clone()], &request, &proof, NOW).unwrap();
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn independent_expiry_root_issuance_and_joint_presentation() {
+    let mut w = world();
+    let mut holder = w.holder();
+    // Different actual passport/gate expiries require the independent profile.
+    let challenge = IssuanceChallenge::generate(&mut w.rng);
+    let issuance = holder
+        .begin_issuance(&mut w.rng, w.global.public_key(), &challenge)
+        .unwrap();
+    let attributes = PassportAttributes::new(EXPIRY, 7).with_gate(w.phone.clone(), EXPIRY - 100);
+    let blind = w
+        .global
+        .issue_blind(&mut w.rng, &issuance, &challenge, &attributes)
+        .unwrap();
+    holder.finish_issuance(&blind).unwrap();
+    let source =
+        PresentationRequest::new(&mut w.rng, w.source.clone(), 7, [w.phone.clone()], NOW).unwrap();
+    assert_eq!(source.epoch_expiry(), None);
+    let context = RootBoardIssuanceContext::new(&mut w.rng, source, w.descriptor.clone()).unwrap();
+    let (root, source) = w.signed_context(&context);
+    let issuance = holder
+        .begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &root,
+            &w.expected_source,
+            &source,
+            NOW,
+        )
+        .unwrap();
+    let verified =
+        verify_root_board_issuance(&[w.global.public_key().clone()], &context, &issuance, NOW)
+            .unwrap();
+    assert_eq!(verified.source_pseudonym(), holder.pseudonym(&w.source));
+    let blind =
+        issue_blind_root_board(&mut w.rng, &w.root_key, &w.descriptor, verified, NOW).unwrap();
+    holder.finish_root_board_issuance(&blind).unwrap();
+    let global = PresentationRequest::new(
+        &mut w.rng,
+        w.root_community.clone(),
+        7,
+        [w.phone.clone()],
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(global.epoch_expiry(), None);
+    let request = RootBoardRequest::new(global, w.descriptor.clone()).unwrap();
+    let signed = sign(&mut w.signer, &request.to_bytes(), request.deadline());
+    let proof = holder
+        .present_root_board(&mut w.rng, &w.expected, &signed, NOW)
+        .unwrap();
+    let nym = verify_root_board(&[w.global.public_key().clone()], &request, &proof, NOW).unwrap();
+    assert_eq!(nym, holder.pseudonym(&w.root_community));
+    assert_ne!(nym, holder.pseudonym(&w.source));
+
+    // Seed the original all-codecs fuzz target with real PUBLIC root objects.
+    // No credential opening, holder secret or retained credential is exported.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(directory) = std::env::var("CPSD_FUZZ_CORPUS") {
+        let dir = std::path::Path::new(&directory);
+        std::fs::create_dir_all(dir).unwrap();
+        for (i, bytes) in [
+            w.descriptor.to_bytes(),
+            context.to_bytes(),
+            issuance.to_bytes(),
+            blind.to_bytes(),
+            request.to_bytes(),
+            proof.to_bytes(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            std::fs::write(dir.join(format!("root-board-independent-{i}")), bytes).unwrap();
+        }
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn root_key_must_be_distinct_from_unselected_global_ring_entries() {
+    let mut w = world();
+    let mut holder = w.holder();
+    w.passport(&mut holder);
+    let context = w.context();
+    let (root, source) = w.signed_context(&context);
+    let issuance = holder
+        .begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &root,
+            &w.expected_source,
+            &source,
+            NOW,
+        )
+        .unwrap();
+    let global = w.global.public_key().clone();
+    let verified =
+        verify_root_board_issuance(std::slice::from_ref(&global), &context, &issuance, NOW)
+            .unwrap();
+    let blind =
+        issue_blind_root_board(&mut w.rng, &w.root_key, &w.descriptor, verified, NOW).unwrap();
+    holder.finish_root_board_issuance(&blind).unwrap();
+    let (request, signed_request) = w.request();
+    let proof = holder
+        .present_root_board(&mut w.rng, &w.expected, &signed_request, NOW)
+        .unwrap();
+    verify_root_board(std::slice::from_ref(&global), &request, &proof, NOW).unwrap();
+
+    let same_id_different_key = IssuerKey::generate(
+        &mut w.rng,
+        w.root_key.public_key().key_id().clone(),
+        vec![w.phone.clone()],
+    )
+    .unwrap();
+    // Both proofs genuinely select global, which is distinct from the root.
+    // Adding an unused ring entry must still enforce the root/global boundary.
+    for unused in [w.root_key.public_key(), same_id_different_key.public_key()] {
+        let ring = [global.clone(), unused.clone()];
+        assert_eq!(
+            verify_root_board_issuance(&ring, &context, &issuance, NOW).err(),
+            Some(Error::InvalidRootBoard)
+        );
+        assert_eq!(
+            verify_root_board(&ring, &request, &proof, NOW).err(),
+            Some(Error::InvalidRootBoard)
+        );
+    }
+    // An unrelated rotation key in the ring remains valid.
+    let other = IssuerKey::generate(
+        &mut w.rng,
+        KeyId::new("global-next").unwrap(),
+        vec![w.phone.clone()],
+    )
+    .unwrap();
+    let ring = [global, other.public_key().clone()];
+    verify_root_board_issuance(&ring, &context, &issuance, NOW).unwrap();
+    verify_root_board(&ring, &request, &proof, NOW).unwrap();
 }

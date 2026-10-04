@@ -163,6 +163,10 @@ pub(crate) fn global_issuer<'a>(
     if matching.next().is_some() {
         return Err(Error::DuplicateKeyId);
     }
-    root.distinct_from(issuer)?;
+    // The common root key must be separate from the entire trusted global ring,
+    // including entries not selected by this proof's global key ID.
+    for global in issuers {
+        root.distinct_from(global)?;
+    }
     Ok(issuer)
 }

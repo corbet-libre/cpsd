@@ -9,7 +9,7 @@ second BBS+ credential over the SAME hidden holder secret as the global passport
 | Object | Role |
 |---|---|
 | `RootBoardPublicKey` | Common root issuer key, root scope, policy epoch and fixed 30-day cohort (Unix-aligned, exclusive expiry). Obtained from authenticated Beacon; never per holder, never per source community. Must differ from every trusted global key. |
-| `RootBoardIssuanceContext` | Verifier-owned: the source request, the common descriptor and a one-use nonce. Signed by the ROOT community ring as a csgn Credential (expiry = deadline + 1). |
+| `RootBoardIssuanceContext` | Verifier-owned: the source request, the common descriptor and a one-use nonce. Signed by the ROOT community ring as a csgn Credential (expiry = deadline + 1). The device separately authenticates the original source-signed request against its initiating SOURCE origin mapping and requires exact equality before proving. |
 | `RootBoardIssuanceRequest` | Joint proof from the holder: global passport possession, source pseudonym, and that the blinded commitment hides the same secret. The issuer sees only the source pseudonym and the commitment, never the root pseudonym. |
 | `VerifiedRootBoardIssuance` | Unforgeable result of `verify_root_board_issuance`. It is NOT a role verdict: the service must hold the current source admin lease and consume the nonce atomically before `issue_blind_root_board`. |
 | `BlindRootBoardCredential` | The blind signature over the common cohort attributes only. No caller-chosen expiry or attribute. |
@@ -21,8 +21,11 @@ second BBS+ credential over the SAME hidden holder secret as the global passport
 internally, beside the global passport. `begin_root_board_issuance`,
 `finish_root_board_issuance`, `cancel_root_board_issuance`, `has_root_board` and
 `present_root_board` are the only entry points; no secret, opening, passport or
-credential is exposed. A failed renewal consumes its attempt and keeps the
-previous credential.
+credential is exposed. A refused source/root authorization never installs or
+consumes a pending opening and keeps the previous credential. Once an authorized
+attempt exists, a failed renewal answer consumes only that attempt and keeps the
+previous credential. The source and root trust anchors are supplied independently;
+a root signature alone cannot authorize a source pseudonym scope.
 
 Sealing keeps the original kind 10 plaintext byte-identical when no root-board
 state exists. Any root-board state selects the explicit kind 12 under the same

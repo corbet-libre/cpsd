@@ -132,9 +132,13 @@ impl OpaqueHolder {
 
     /// Start the same-holder root-board issuance with the retained passport.
     ///
-    /// `expected` is the ROOT community's authenticated origin mapping and
+    /// `expected_root` is the ROOT community's authenticated origin mapping and
     /// `signed_context` the root service's csgn Credential over the exact
-    /// context. The commitment, source-pseudonym proof and secret equality are
+    /// context. `expected_source` independently pins the initiating SOURCE
+    /// community; `signed_source_request` is its original signed presentation
+    /// request and must exactly match the context. Both are authenticated before
+    /// producing a proof or storing a pending opening.
+    /// The commitment, source-pseudonym proof and secret equality are
     /// produced from the retained passport; no secret or opening is returned.
     /// A pending root attempt must finish or be cancelled first. A failed
     /// renewal leaves the previous verified root credential and the global
@@ -142,15 +146,22 @@ impl OpaqueHolder {
     pub fn begin_root_board_issuance<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
-        expected: &AuthenticatedCommunity,
+        expected_root: &AuthenticatedCommunity,
         signed_context: &[u8],
+        expected_source: &AuthenticatedCommunity,
+        signed_source_request: &[u8],
         now: Timestamp,
     ) -> Result<RootBoardIssuanceRequest, Error> {
         if self.root_board.pending.is_some() {
             return Err(Error::IssuancePending);
         }
         let passport = self.passport.as_ref().ok_or(Error::PassportUnavailable)?;
-        let context = expected.authenticate_root_board_issuance(signed_context, now)?;
+        let context = expected_root.authenticate_root_board_issuance(
+            signed_context,
+            expected_source,
+            signed_source_request,
+            now,
+        )?;
         let (request, pending) = root_board::begin_issuance(rng, passport, &context)?;
         self.root_board.pending = Some(pending);
         Ok(request)

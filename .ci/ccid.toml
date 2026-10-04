@@ -13,6 +13,10 @@ commands = [["bash", ".ci/check.sh", "native"]]
 kind = "commands"
 commands = [["bash", ".ci/check.sh", "wasm"]]
 
+[checks.browser-diagnostic]
+kind = "commands"
+commands = [["bash", ".ci/browser-diagnostic.sh"]]
+
 [checks.dependency-policy]
 kind = "commands"
 commands = [["bash", ".ci/check.sh", "dependency-policy"]]
