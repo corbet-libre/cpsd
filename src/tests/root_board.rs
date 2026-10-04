@@ -422,3 +422,209 @@ fn descriptor_and_wire_objects_refuse_noncanonical_input() {
         Some(Error::InvalidRootBoard)
     );
 }
+
+#[test]
+fn restored_root_state_binds_each_opening_and_credential_independently() {
+    let mut rng = rng();
+    let global = key(&mut rng, "global");
+    let root_key = root_issuer(&mut rng, "root-board-1");
+    let other_key = root_issuer(&mut rng, "root-board-2");
+    let root = descriptor(&root_key, 3);
+    let other_root = descriptor(&other_key, 3);
+    let alice = holder(&mut rng, &global);
+    let bob = holder(&mut rng, &global);
+    let credential = mint(&mut rng, &global, &root_key, &root, &alice);
+    let context = context(&mut rng, &root);
+    let (_, pending) = root_board::begin_issuance(&mut rng, &alice, &context).unwrap();
+
+    // These encodings are individually valid; their associations are hostile.
+    let encode = |pending_descriptor: &[u8], opening: &[u8], descriptor: &[u8], passport: &[u8]| {
+        let mut w = Writer::new(Kind::RootBoardState);
+        w.bytes(pending_descriptor);
+        w.bytes(opening);
+        w.bytes(descriptor);
+        w.bytes(passport);
+        w.finish_secret()
+    };
+    let opening = pending.opening.to_bytes();
+    let root_bytes = root.to_bytes();
+    let other_bytes = other_root.to_bytes();
+    let passport = credential.passport.to_bytes();
+    for bytes in [
+        encode(&other_bytes, &opening, &[], &[]),
+        encode(&[], &[], &other_bytes, &passport),
+        encode(&[], &[], &descriptor(&root_key, 4).to_bytes(), &passport),
+    ] {
+        assert_eq!(
+            RootBoardState::from_bytes(&bytes, alice.secret()).err(),
+            Some(Error::InvalidSealedHolder)
+        );
+    }
+    let valid = encode(&[], &[], &root_bytes, &passport);
+    assert_eq!(
+        RootBoardState::from_bytes(&valid, bob.secret()).err(),
+        Some(Error::InvalidSealedHolder)
+    );
+    let restored = RootBoardState::from_bytes(&valid, alice.secret()).unwrap();
+    let request = root_request(&mut rng, &root);
+    let proof = root_board::present(
+        &mut rng,
+        &alice,
+        restored.credential.as_ref().unwrap(),
+        &request,
+    )
+    .unwrap();
+    assert_eq!(
+        verify_root_board(&[global.public_key().clone()], &request, &proof, NOW).unwrap(),
+        alice.pseudonym(&root_community())
+    );
+
+    // A missing half is malformed, rather than silently treated as absent.
+    for bytes in [
+        encode(&[], &opening, &[], &[]),
+        encode(&root_bytes, &[], &[], &[]),
+        encode(&[], &[], &[], &passport),
+        encode(&[], &[], &root_bytes, &[]),
+    ] {
+        assert!(RootBoardState::from_bytes(&bytes, alice.secret()).is_err());
+    }
+}
+
+#[test]
+fn root_presentation_codec_rejects_independent_expiry_proofs_for_root_credential() {
+    let mut rng = rng();
+    let global = key(&mut rng, "global");
+    let root_key = root_issuer(&mut rng, "root-board-1");
+    let root = descriptor(&root_key, 3);
+    let alice = holder(&mut rng, &global);
+    let credential = mint(&mut rng, &global, &root_key, &root, &alice);
+    let global_request =
+        PresentationRequest::for_epoch(&mut rng, root_community(), 7, [gate()], NOW, EXPIRY)
+            .unwrap();
+    let global_proof = alice.present_trusted(&mut rng, &global_request).unwrap();
+    let independent = PresentationRequest::new(
+        &mut rng,
+        root_community(),
+        root.policy_epoch(),
+        [root_gate()],
+        NOW,
+    )
+    .unwrap();
+    let root_proof = credential
+        .passport
+        .present_trusted(&mut rng, &independent)
+        .unwrap();
+    // The original independent proof is valid for its original request.
+    verify(
+        &mut rng,
+        &[root_key.public_key().clone()],
+        &independent,
+        &root_proof,
+    )
+    .unwrap();
+    let mut w = Writer::new(Kind::RootBoardPresentation);
+    w.key_id(global.public_key().key_id());
+    w.fixed(&global_proof.pseudonym().to_bytes());
+    w.proof(&global_proof.proof);
+    w.proof(&root_proof.proof);
+    assert_eq!(
+        RootBoardPresentation::from_bytes(&w.finish_public()).err(),
+        Some(Error::InvalidRootBoard)
+    );
+}
+
+#[test]
+fn root_cohort_cannot_authorize_a_request_before_its_start() {
+    let mut rng = rng();
+    let root_key = root_issuer(&mut rng, "root-board-1");
+    let start = crate::root_board::ROOT_BOARD_COHORT_SECONDS;
+    let root = RootBoardPublicKey::from_authenticated_beacon(
+        root_key.public_key().clone(),
+        root_community(),
+        3,
+        start,
+    )
+    .unwrap();
+    let early_source = PresentationRequest::new(&mut rng, community(), 7, [], start - 1).unwrap();
+    assert_eq!(
+        RootBoardIssuanceContext::new(&mut rng, early_source, root.clone()).err(),
+        Some(Error::InvalidRootBoard)
+    );
+    let current_source = PresentationRequest::new(&mut rng, community(), 7, [], start).unwrap();
+    RootBoardIssuanceContext::new(&mut rng, current_source, root).unwrap();
+}
+
+#[test]
+fn root_issuance_wire_rejects_identity_commitments_and_foreign_blind_issuers() {
+    use crate::wire::Reader;
+    use ark_bls12_381::G1Affine;
+    use ark_ec::AffineRepr;
+
+    let mut rng = rng();
+    let global = key(&mut rng, "global");
+    let root_key = root_issuer(&mut rng, "root-board-1");
+    let root = descriptor(&root_key, 3);
+    let alice = holder(&mut rng, &global);
+    let context = context(&mut rng, &root);
+    let (request, pending) = root_board::begin_issuance(&mut rng, &alice, &context).unwrap();
+
+    // Preserve the genuine proof fields while replacing only the commitment.
+    let bytes = request.to_bytes();
+    let mut r = Reader::new(&bytes, Kind::RootBoardIssuanceRequest).unwrap();
+    let key_id = r.key_id().unwrap();
+    let pseudonym = r.fixed::<48>().unwrap();
+    let _: G1Affine = r.ark("root commitment").unwrap();
+    let proof = r.proof().unwrap();
+    let opening = r.bytes().unwrap();
+    r.finish().unwrap();
+    let mut w = Writer::new(Kind::RootBoardIssuanceRequest);
+    w.key_id(&key_id);
+    w.fixed(&pseudonym);
+    w.ark(&G1Affine::zero());
+    w.proof(&proof);
+    w.bytes(opening);
+    assert_eq!(
+        RootBoardIssuanceRequest::from_bytes(&w.finish_public()).err(),
+        Some(Error::InvalidRootBoard)
+    );
+    let verified =
+        verify_root_board_issuance(&[global.public_key().clone()], &context, &request, NOW)
+            .unwrap();
+    let blind = issue_blind_root_board(&mut rng, &root_key, &root, verified, NOW).unwrap();
+    let bytes = blind.to_bytes();
+    let mut r = Reader::new(&bytes, Kind::BlindRootBoardCredential).unwrap();
+    let _original_descriptor = r.bytes().unwrap();
+    let blind_passport = r.bytes().unwrap();
+    r.finish().unwrap();
+    let other_key = root_issuer(&mut rng, "root-board-2");
+    let other_root = descriptor(&other_key, 3);
+    assert_eq!(root.attributes(), other_root.attributes());
+    let mut w = Writer::new(Kind::BlindRootBoardCredential);
+    w.bytes(&other_root.to_bytes());
+    w.bytes(blind_passport);
+    assert_eq!(
+        BlindRootBoardCredential::from_bytes(&w.finish_public()).err(),
+        Some(Error::InvalidRootBoard)
+    );
+    let original = BlindRootBoardCredential::from_bytes(&bytes).unwrap();
+    let mut state = RootBoardState {
+        pending: Some(pending),
+        credential: None,
+    };
+    state.finish(&original).unwrap();
+    let changed = root_request(&mut rng, &descriptor(&root_key, 4));
+    assert_eq!(
+        root_board::present(
+            &mut rng,
+            &alice,
+            state.credential.as_ref().unwrap(),
+            &changed
+        )
+        .err(),
+        Some(Error::InvalidRootBoard)
+    );
+    let valid = root_request(&mut rng, &root);
+    let proof =
+        root_board::present(&mut rng, &alice, state.credential.as_ref().unwrap(), &valid).unwrap();
+    verify_root_board(&[global.public_key().clone()], &valid, &proof, NOW).unwrap();
+}

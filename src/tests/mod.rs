@@ -1,4 +1,5 @@
 mod proof_migration;
+mod refusal_paths;
 mod root_board;
 
 use crate::test_support::TestPresentation;

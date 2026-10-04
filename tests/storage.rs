@@ -266,6 +266,15 @@ async fn end_to_end(
         verifier.request(&mut rng, 1, [gate], 200).await.unwrap()
     };
     let proof = passport.present_trusted(&mut rng, &challenge).unwrap();
+    let foreign = Verifier::new(
+        MemoryStore::new(scope("different-community"), 10).unwrap(),
+        vec![issuer.public_key().clone()],
+    )
+    .unwrap();
+    assert_eq!(
+        foreign.verify(&mut rng, &challenge, &proof, 1, 190).await,
+        Err(Error::InvalidChallenge)
+    );
     assert_eq!(
         verifier.verify(&mut rng, &challenge, &proof, 2, 190).await,
         Err(Error::WrongEpoch)
@@ -335,6 +344,51 @@ async fn real_crypto_sessions_reject_replays_with_both_backends() {
         )
         .await;
     }
+}
+
+async fn session_collision_contract(store: impl ChallengeStore + Clone) {
+    let mut key_rng = StdRng::seed_from_u64(802);
+    let issuer = IssuerKey::generate(&mut key_rng, KeyId::new("issuer").unwrap(), vec![]).unwrap();
+    assert_eq!(
+        Verifier::new(
+            store.clone(),
+            vec![issuer.public_key().clone(), issuer.public_key().clone()],
+        )
+        .err(),
+        Some(Error::DuplicateKeyId)
+    );
+    let verifier = Verifier::new(store.clone(), vec![issuer.public_key().clone()]).unwrap();
+    let mut rng = StdRng::seed_from_u64(803);
+    let mut repeated_rng = rng.clone();
+    verifier.request(&mut rng, 1, [], 100).await.unwrap();
+    assert_eq!(
+        verifier.request(&mut repeated_rng, 1, [], 200).await.err(),
+        Some(Error::ChallengeConflict)
+    );
+    assert_eq!(verifier.prune(100).await.unwrap(), 0);
+    assert_eq!(verifier.prune(101).await.unwrap(), 1);
+
+    let auth = AuthenticatedIssuance::new([1; 32], [2; 32]);
+    let mut rng = StdRng::seed_from_u64(804);
+    let mut repeated_rng = rng.clone();
+    issuance_challenge(&mut rng, &store, issuer.public_key(), &auth, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        issuance_challenge(&mut repeated_rng, &store, issuer.public_key(), &auth, 200)
+            .await
+            .err(),
+        Some(Error::ChallengeConflict)
+    );
+    assert_eq!(store.prune(100).await.unwrap(), 0);
+    assert_eq!(store.prune(101).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn session_nonce_collisions_preserve_original_deadlines_on_both_backends() {
+    session_collision_contract(MemoryStore::new(scope("memory"), 10).unwrap()).await;
+    let (_dir, db, _) = database().await;
+    session_collision_contract(LibsqlStore::new(&db, scope("libsql"), 10).unwrap()).await;
 }
 
 #[tokio::test]
