@@ -18,6 +18,13 @@ The matching upstream wasm-bindgen CLI and sibling test runner are acquired from
 the actual candidate lock, with archive and executable hashes retained. Browser
 compilation alone never satisfies the browser phase.
 
+Both browser selectors include the existing `root_board` integration target.
+Those vectors exercise the original same-holder blind issuance, authenticated
+request refusals, sealed holder restart and joint presentation in actual Wasm.
+The native-only hostile private-proof vectors remain part of the native suite.
+Selecting these tests does not establish that they compile, meet browser timing
+or pass; the complete fixed acceptance execution remains required.
+
 This source is not a completed or dispatched full acceptance run. A fixed Crow
 workflow still requires the independently qualified two-lock ccid revision and
 its exact artifact receipts. No local builds or independent job dispatch are

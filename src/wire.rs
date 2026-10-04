@@ -47,10 +47,17 @@ impl Kind {
     // Original key, passport, pending issuance and immutable seal codecs stay v2.
     fn version(self) -> u8 {
         match self {
-            Self::IssuanceRequest | Self::PresentationRequest | Self::Presentation
-            | Self::OpaqueHolderWithRootBoard | Self::RootBoardState | Self::RootBoardPublicKey
-            | Self::RootBoardIssuanceContext | Self::RootBoardIssuanceRequest
-            | Self::BlindRootBoardCredential | Self::RootBoardRequest | Self::RootBoardPresentation => 3,
+            Self::IssuanceRequest
+            | Self::PresentationRequest
+            | Self::Presentation
+            | Self::OpaqueHolderWithRootBoard
+            | Self::RootBoardState
+            | Self::RootBoardPublicKey
+            | Self::RootBoardIssuanceContext
+            | Self::RootBoardIssuanceRequest
+            | Self::BlindRootBoardCredential
+            | Self::RootBoardRequest
+            | Self::RootBoardPresentation => 3,
             _ => 2,
         }
     }

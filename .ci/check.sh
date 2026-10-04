@@ -46,7 +46,7 @@ case "${1:?selected check required}" in
     unset NO_HEADLESS WASM_BINDGEN_USE_NODE_EXPERIMENTAL WASM_BINDGEN_USE_DENO
     unset WASM_BINDGEN_USE_DEDICATED_WORKER WASM_BINDGEN_USE_SHARED_WORKER WASM_BINDGEN_USE_SERVICE_WORKER
     chromium --version
-    cargo test --release --locked --target wasm32-unknown-unknown --test browser --test opaque_holder --test boundaries --test privacy_diagnostics --test proof_vectors -- --nocapture
+    cargo test --release --locked --target wasm32-unknown-unknown --test browser --test opaque_holder --test boundaries --test privacy_diagnostics --test proof_vectors --test root_board -- --nocapture
     ;;
   coverage)
     export CARGO_PROFILE_TEST_OPT_LEVEL=0

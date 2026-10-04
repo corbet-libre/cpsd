@@ -365,7 +365,10 @@ pub(crate) fn present_checked<R: RngCore + CryptoRng>(
     prove(rng, passport, request)
 }
 
-pub(crate) fn check_request(passport: &Passport, request: &PresentationRequest) -> Result<(), Error> {
+pub(crate) fn check_request(
+    passport: &Passport,
+    request: &PresentationRequest,
+) -> Result<(), Error> {
     let attributes = passport.attributes();
     let issuer = passport.issuer();
     if attributes.policy_epoch != request.policy_epoch {

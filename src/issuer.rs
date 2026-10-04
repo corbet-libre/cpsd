@@ -246,9 +246,14 @@ impl IssuerKey {
 
     // Only verified original issuance paths may call this private signing step.
     pub(crate) fn issue_commitment<R: RngCore + CryptoRng>(
-        &self, rng: &mut R, commitment: &G1Affine, attributes: &PassportAttributes,
+        &self,
+        rng: &mut R,
+        commitment: &G1Affine,
+        attributes: &PassportAttributes,
     ) -> Result<BlindPassport, Error> {
-        if commitment.is_zero() { return Err(Error::InvalidIssuanceRequest); }
+        if commitment.is_zero() {
+            return Err(Error::InvalidIssuanceRequest);
+        }
         attributes.validate(&self.public.gates)?;
         let revocation = nonzero_scalar(rng);
         let mut known = BTreeMap::new();

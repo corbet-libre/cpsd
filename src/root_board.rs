@@ -6,23 +6,25 @@
 
 use crate::{
     CommunityId, Error, GateId, IssuerPublicKey, PassportAttributes, PresentationRequest,
-    Timestamp, attributes::check_timestamp, wire::{Kind, Reader, Writer},
+    Timestamp,
+    attributes::check_timestamp,
+    wire::{Kind, Reader, Writer},
 };
 
 mod issuance;
 mod presentation;
 pub(crate) mod state;
+pub(crate) use issuance::request as begin_issuance;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) use issuance::request_for_opening;
 pub use issuance::{
     BlindRootBoardCredential, RootBoardIssuanceContext, RootBoardIssuanceRequest,
     VerifiedRootBoardIssuance, issue_blind_root_board, verify_root_board_issuance,
 };
-pub(crate) use issuance::request as begin_issuance;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) use issuance::request_for_opening;
-pub use presentation::{RootBoardPresentation, RootBoardRequest, verify_root_board};
-pub(crate) use presentation::present;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use presentation::build as build_presentation;
+pub(crate) use presentation::present;
+pub use presentation::{RootBoardPresentation, RootBoardRequest, verify_root_board};
 
 /// Common fixed cohort duration; individual issuance times are never attributes.
 pub const ROOT_BOARD_COHORT_SECONDS: u64 = 30 * 24 * 60 * 60;
@@ -56,22 +58,39 @@ impl RootBoardPublicKey {
         if issuer.gates() != [gate()] || !cohort_start.is_multiple_of(ROOT_BOARD_COHORT_SECONDS) {
             return Err(Error::InvalidRootBoard);
         }
-        let expires_at = cohort_start.checked_add(ROOT_BOARD_COHORT_SECONDS)
+        let expires_at = cohort_start
+            .checked_add(ROOT_BOARD_COHORT_SECONDS)
             .ok_or(Error::InvalidRootBoard)?;
         check_timestamp(expires_at)?;
-        Ok(Self { issuer, community, policy_epoch, cohort_start, expires_at })
+        Ok(Self {
+            issuer,
+            community,
+            policy_epoch,
+            cohort_start,
+            expires_at,
+        })
     }
 
     /// Common published BBS+ issuer, distinct from global passport keys.
-    pub fn issuer(&self) -> &IssuerPublicKey { &self.issuer }
+    pub fn issuer(&self) -> &IssuerPublicKey {
+        &self.issuer
+    }
     /// Root pseudonym scope.
-    pub fn community(&self) -> &CommunityId { &self.community }
+    pub fn community(&self) -> &CommunityId {
+        &self.community
+    }
     /// Common policy epoch.
-    pub fn policy_epoch(&self) -> u64 { self.policy_epoch }
+    pub fn policy_epoch(&self) -> u64 {
+        self.policy_epoch
+    }
     /// Common exclusive expiry.
-    pub fn expires_at(&self) -> Timestamp { self.expires_at }
+    pub fn expires_at(&self) -> Timestamp {
+        self.expires_at
+    }
     /// Beginning of the common 30-day cohort.
-    pub fn cohort_start(&self) -> Timestamp { self.cohort_start }
+    pub fn cohort_start(&self) -> Timestamp {
+        self.cohort_start
+    }
 
     pub(crate) fn current(&self, now: Timestamp) -> Result<(), Error> {
         check_timestamp(now)?;
@@ -97,11 +116,19 @@ impl RootBoardPublicKey {
             .with_gate(gate(), self.expires_at - 1)
     }
 
-    pub(crate) fn request(&self, global: &PresentationRequest) -> Result<PresentationRequest, Error> {
+    pub(crate) fn request(
+        &self,
+        global: &PresentationRequest,
+    ) -> Result<PresentationRequest, Error> {
         self.current(global.now())?;
-        PresentationRequest::with_challenge(self.community.clone(), self.policy_epoch,
-            [gate()], global.now(), global.challenge())?
-            .with_epoch_expiry(self.expires_at - 1)
+        PresentationRequest::with_challenge(
+            self.community.clone(),
+            self.policy_epoch,
+            [gate()],
+            global.now(),
+            global.challenge(),
+        )?
+        .with_epoch_expiry(self.expires_at - 1)
     }
 
     /// Canonical public descriptor. Decoding alone does not authenticate Beacon.
@@ -127,11 +154,15 @@ impl RootBoardPublicKey {
 }
 
 pub(crate) fn global_issuer<'a>(
-    issuers: &'a [IssuerPublicKey], key_id: &crate::KeyId, root: &RootBoardPublicKey,
+    issuers: &'a [IssuerPublicKey],
+    key_id: &crate::KeyId,
+    root: &RootBoardPublicKey,
 ) -> Result<&'a IssuerPublicKey, Error> {
     let mut matching = issuers.iter().filter(|key| key.key_id() == key_id);
     let issuer = matching.next().ok_or(Error::UnknownKey)?;
-    if matching.next().is_some() { return Err(Error::DuplicateKeyId); }
+    if matching.next().is_some() {
+        return Err(Error::DuplicateKeyId);
+    }
     root.distinct_from(issuer)?;
     Ok(issuer)
 }

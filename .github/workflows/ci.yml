@@ -123,7 +123,7 @@ jobs:
 
         google-chrome --version
 
-        cargo test --release --locked --target wasm32-unknown-unknown --test browser --test opaque_holder --test boundaries --test privacy_diagnostics --test proof_vectors -- --nocapture
+        cargo test --release --locked --target wasm32-unknown-unknown --test browser --test opaque_holder --test boundaries --test privacy_diagnostics --test proof_vectors --test root_board -- --nocapture
 
         '
     - name: Dependency license inventory

@@ -35,7 +35,8 @@ fn global_attrs() -> PassportAttributes {
     PassportAttributes::new(EXPIRY, 7).with_gate(gate(), EXPIRY)
 }
 fn context(rng: &mut StdRng, root: &RootBoardPublicKey) -> RootBoardIssuanceContext {
-    let source = PresentationRequest::for_epoch(rng, community(), 7, [gate()], NOW, EXPIRY).unwrap();
+    let source =
+        PresentationRequest::for_epoch(rng, community(), 7, [gate()], NOW, EXPIRY).unwrap();
     RootBoardIssuanceContext::new(rng, source, root.clone()).unwrap()
 }
 fn holder(rng: &mut StdRng, global: &IssuerKey) -> Passport {
@@ -54,14 +55,13 @@ fn mint(
     let context = context(rng, root);
     let (request, pending) = root_board::begin_issuance(rng, passport, &context).unwrap();
     let request = RootBoardIssuanceRequest::from_bytes(&request.to_bytes()).unwrap();
-    let verified = verify_root_board_issuance(
-        &[global.public_key().clone()],
-        &context,
-        &request,
-        NOW,
-    )
-    .unwrap();
-    assert_eq!(verified.source_pseudonym(), passport.pseudonym(&community()));
+    let verified =
+        verify_root_board_issuance(&[global.public_key().clone()], &context, &request, NOW)
+            .unwrap();
+    assert_eq!(
+        verified.source_pseudonym(),
+        passport.pseudonym(&community())
+    );
     assert_eq!(verified.source_community(), &community());
     assert_eq!(verified.nonce(), context.nonce());
     assert_eq!(verified.deadline(), NOW);
@@ -201,8 +201,13 @@ fn issuance_is_bound_to_context_cohort_scope_issuer_and_time() {
         Some(Error::UnknownKey)
     );
     assert_eq!(
-        verify_root_board_issuance(&[issuers[0].clone(), issuers[0].clone()], &first, &request, NOW)
-            .err(),
+        verify_root_board_issuance(
+            &[issuers[0].clone(), issuers[0].clone()],
+            &first,
+            &request,
+            NOW
+        )
+        .err(),
         Some(Error::DuplicateKeyId)
     );
     // The root key must differ from every global key the verifier trusts.
@@ -256,13 +261,9 @@ fn answers_for_other_descriptors_or_attributes_never_install() {
     let alice = holder(&mut rng, &global);
     let context = context(&mut rng, &root);
     let (request, pending) = root_board::begin_issuance(&mut rng, &alice, &context).unwrap();
-    let verified = verify_root_board_issuance(
-        &[global.public_key().clone()],
-        &context,
-        &request,
-        NOW,
-    )
-    .unwrap();
+    let verified =
+        verify_root_board_issuance(&[global.public_key().clone()], &context, &request, NOW)
+            .unwrap();
     let blind = issue_blind_root_board(&mut rng, &root_key, &root, verified, NOW).unwrap();
     // An answer carrying another descriptor is refused and consumes the attempt.
     let mut state = RootBoardState {
@@ -351,7 +352,10 @@ fn descriptor_and_wire_objects_refuse_noncanonical_input() {
     let root = descriptor(&root_key, 3);
     assert!(RootBoardPublicKey::from_bytes(&root.to_bytes()).unwrap() == root);
     assert_eq!(root.cohort_start(), 0);
-    assert_eq!(root.expires_at(), crate::root_board::ROOT_BOARD_COHORT_SECONDS);
+    assert_eq!(
+        root.expires_at(),
+        crate::root_board::ROOT_BOARD_COHORT_SECONDS
+    );
     assert_eq!(root.policy_epoch(), 3);
     assert_eq!(root.community(), &root_community());
     assert_eq!(root.issuer(), root_key.public_key());
@@ -385,7 +389,8 @@ fn descriptor_and_wire_objects_refuse_noncanonical_input() {
     assert!(RootBoardPublicKey::from_bytes(&bytes).is_err());
     // A context cannot share its source and root scope, nor start outside the cohort.
     let source =
-        PresentationRequest::for_epoch(&mut rng, root_community(), 7, [gate()], NOW, EXPIRY).unwrap();
+        PresentationRequest::for_epoch(&mut rng, root_community(), 7, [gate()], NOW, EXPIRY)
+            .unwrap();
     assert_eq!(
         RootBoardIssuanceContext::new(&mut rng, source, root.clone()).err(),
         Some(Error::InvalidRootBoard)

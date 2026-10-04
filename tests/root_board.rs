@@ -41,8 +41,8 @@ struct World {
 fn world() -> World {
     let mut rng = StdRng::seed_from_u64(311);
     let phone = GateId::new("phone").unwrap();
-    let global = IssuerKey::generate(&mut rng, KeyId::new("global").unwrap(), vec![phone.clone()])
-        .unwrap();
+    let global =
+        IssuerKey::generate(&mut rng, KeyId::new("global").unwrap(), vec![phone.clone()]).unwrap();
     let root_key = IssuerKey::generate(
         &mut rng,
         KeyId::new("root-board-1").unwrap(),
@@ -127,7 +127,10 @@ impl World {
         .unwrap();
         // Only the source pseudonym and the shared common cohort reach the issuer.
         assert_eq!(verified.source_pseudonym(), holder.pseudonym(&self.source));
-        assert_ne!(verified.source_pseudonym(), holder.pseudonym(&self.root_community));
+        assert_ne!(
+            verified.source_pseudonym(),
+            holder.pseudonym(&self.root_community)
+        );
         let blind = issue_blind_root_board(
             &mut self.rng,
             &self.root_key,
@@ -191,15 +194,11 @@ fn issuance_seal_restore_and_joint_presentation_use_one_hidden_secret() {
         holder.begin_root_board_issuance(&mut w.rng, &w.expected, &signed, NOW),
         Err(Error::IssuancePending)
     ));
-    let verified = verify_root_board_issuance(
-        &[w.global.public_key().clone()],
-        &context,
-        &issuance,
-        NOW,
-    )
-    .unwrap();
-    let blind = issue_blind_root_board(&mut w.rng, &w.root_key, &w.descriptor, verified, NOW)
-        .unwrap();
+    let verified =
+        verify_root_board_issuance(&[w.global.public_key().clone()], &context, &issuance, NOW)
+            .unwrap();
+    let blind =
+        issue_blind_root_board(&mut w.rng, &w.root_key, &w.descriptor, verified, NOW).unwrap();
     let sealed = holder.seal(&mut w.rng).unwrap();
     holder = reopened
         .restored(&SealedHolder::from_bytes(sealed.as_bytes()).unwrap())
@@ -226,9 +225,15 @@ fn issuance_seal_restore_and_joint_presentation_use_one_hidden_secret() {
     assert_ne!(nym, holder.pseudonym(&w.source));
 
     // The old global presentation API is unaffected by the extension.
-    let plain =
-        PresentationRequest::for_epoch(&mut w.rng, w.source.clone(), 7, [w.phone.clone()], NOW, EXPIRY)
-            .unwrap();
+    let plain = PresentationRequest::for_epoch(
+        &mut w.rng,
+        w.source.clone(),
+        7,
+        [w.phone.clone()],
+        NOW,
+        EXPIRY,
+    )
+    .unwrap();
     let source_signer_cose = sign(&mut signer(6), &plain.to_bytes(), plain.now());
     let source_expected = AuthenticatedCommunity::from_authenticated_origin(
         w.source.clone(),
@@ -243,7 +248,11 @@ fn issuance_seal_restore_and_joint_presentation_use_one_hidden_secret() {
     );
 
     // Holders with another seed or sealing context never restore this state.
-    for (seed, key, context) in [(9, 8, b"wallet-a"), (7, 9, b"wallet-a"), (7, 8, b"wallet-b")] {
+    for (seed, key, context) in [
+        (9, 8, b"wallet-a"),
+        (7, 9, b"wallet-a"),
+        (7, 8, b"wallet-b"),
+    ] {
         let wrong =
             OpaqueHolder::from_seed_and_sealing_key(&mut [seed; 32], &mut [key; 32], context)
                 .unwrap();
@@ -371,7 +380,11 @@ fn only_the_root_scope_authenticates_issuance_contexts_and_requests() {
         Err(Error::InvalidPresentationRequest)
     ));
     let (request, signed_request) = w.request();
-    let plain = sign(&mut w.signer, &request.global_request().to_bytes(), request.deadline());
+    let plain = sign(
+        &mut w.signer,
+        &request.global_request().to_bytes(),
+        request.deadline(),
+    );
     assert!(matches!(
         holder.begin_root_board_issuance(&mut w.rng, &w.expected, &plain, NOW),
         Err(Error::InvalidPresentationRequest)

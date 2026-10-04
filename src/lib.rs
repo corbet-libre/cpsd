@@ -38,8 +38,8 @@ mod opaque_holder;
 mod params;
 mod presentation;
 mod proof;
-mod root_board;
 mod proof_wire;
+mod root_board;
 mod session;
 pub mod storage;
 mod wire;
@@ -60,8 +60,13 @@ pub use issuer::{
     BlindPassport, IssuanceChallenge, IssuanceRequest, IssuerKey, IssuerPublicKey, IssuerTag,
 };
 pub use opaque_holder::{OpaqueHolder, SealedHolder};
-pub use root_board::{ROOT_BOARD_COHORT_SECONDS, RootBoardPublicKey, RootBoardIssuanceContext, RootBoardIssuanceRequest, VerifiedRootBoardIssuance, BlindRootBoardCredential, RootBoardRequest, RootBoardPresentation, verify_root_board_issuance, issue_blind_root_board, verify_root_board};
 pub use presentation::{Presentation, PresentationRequest, Pseudonym, present, verify};
+pub use root_board::{
+    BlindRootBoardCredential, ROOT_BOARD_COHORT_SECONDS, RootBoardIssuanceContext,
+    RootBoardIssuanceRequest, RootBoardPresentation, RootBoardPublicKey, RootBoardRequest,
+    VerifiedRootBoardIssuance, issue_blind_root_board, verify_root_board,
+    verify_root_board_issuance,
+};
 
 pub use session::{Verifier, issuance_challenge, issue_blind_once};
 pub use storage::{ChallengeRecord, ChallengeStore, IssuanceStore, MemoryStore, VerifiedIssuance};

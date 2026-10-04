@@ -1,11 +1,15 @@
 use ark_bls12_381::Fr;
-use ark_std::{UniformRand, rand::{CryptoRng, RngCore}};
+use ark_std::{
+    UniformRand,
+    rand::{CryptoRng, RngCore},
+};
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 
 use super::{RootBoardPublicKey, global_issuer, state::RootBoardCredential};
 use crate::{
     Error, IssuerPublicKey, KeyId, Passport, PresentationRequest, Pseudonym, Timestamp,
-    presentation::check_request, proof::{PresentationProof, PresentationProtocol},
+    presentation::check_request,
+    proof::{PresentationProof, PresentationProtocol},
     wire::{Kind, Reader, Writer},
 };
 
@@ -23,19 +27,29 @@ impl RootBoardRequest {
     /// descriptor. Both original global presentation profiles are supported.
     pub fn new(global: PresentationRequest, root: RootBoardPublicKey) -> Result<Self, Error> {
         root.current(global.now())?;
-        if global.community() != root.community() { return Err(Error::InvalidRootBoard); }
+        if global.community() != root.community() {
+            return Err(Error::InvalidRootBoard);
+        }
         Ok(Self { global, root })
     }
     /// Original global passport requirements and one-use challenge.
-    pub fn global_request(&self) -> &PresentationRequest { &self.global }
+    pub fn global_request(&self) -> &PresentationRequest {
+        &self.global
+    }
     /// Authenticated common root issuer/cohort.
-    pub fn root(&self) -> &RootBoardPublicKey { &self.root }
+    pub fn root(&self) -> &RootBoardPublicKey {
+        &self.root
+    }
     /// Inclusive request deadline.
-    pub fn deadline(&self) -> Timestamp { self.global.now() }
+    pub fn deadline(&self) -> Timestamp {
+        self.global.now()
+    }
 
     pub(crate) fn current(&self, now: Timestamp) -> Result<(), Error> {
         self.root.current(now)?;
-        if now > self.deadline() { return Err(Error::InvalidChallenge); }
+        if now > self.deadline() {
+            return Err(Error::InvalidChallenge);
+        }
         Ok(())
     }
 
@@ -83,8 +97,15 @@ impl RootBoardPresentation {
         let global = r.proof()?;
         let root = r.proof()?;
         r.finish()?;
-        if !root.ranges.is_empty() { return Err(Error::InvalidRootBoard); }
-        Ok(Self { global_key, pseudonym, global, root })
+        if !root.ranges.is_empty() {
+            return Err(Error::InvalidRootBoard);
+        }
+        Ok(Self {
+            global_key,
+            pseudonym,
+            global,
+            root,
+        })
     }
 }
 
@@ -96,7 +117,10 @@ fn transcript(global: &IssuerPublicKey, request: &RootBoardRequest) -> MerlinTra
 }
 
 pub(crate) fn present<R: RngCore + CryptoRng>(
-    rng: &mut R, passport: &Passport, credential: &RootBoardCredential, request: &RootBoardRequest,
+    rng: &mut R,
+    passport: &Passport,
+    credential: &RootBoardCredential,
+    request: &RootBoardRequest,
 ) -> Result<RootBoardPresentation, Error> {
     if credential.descriptor != request.root || passport.secret.0 != credential.passport.secret.0 {
         return Err(Error::InvalidRootBoard);
@@ -108,7 +132,10 @@ pub(crate) fn present<R: RngCore + CryptoRng>(
 /// [`present`] ONLY so tests can build a hostile proof that mixes credentials of
 /// two holders; production callers always go through [`present`].
 pub(crate) fn build<R: RngCore + CryptoRng>(
-    rng: &mut R, passport: &Passport, credential: &RootBoardCredential, request: &RootBoardRequest,
+    rng: &mut R,
+    passport: &Passport,
+    credential: &RootBoardCredential,
+    request: &RootBoardRequest,
 ) -> Result<RootBoardPresentation, Error> {
     request.root.distinct_from(passport.issuer())?;
     check_request(passport, &request.global)?;
@@ -126,8 +153,10 @@ pub(crate) fn build<R: RngCore + CryptoRng>(
     root.contribute(&mut t)?;
     let challenge = t.challenge_scalar::<Fr>(b"challenge");
     Ok(RootBoardPresentation {
-        global_key: passport.key_id().clone(), pseudonym,
-        global: global.finish(&challenge)?, root: root.finish(&challenge)?,
+        global_key: passport.key_id().clone(),
+        pseudonym,
+        global: global.finish(&challenge)?,
+        root: root.finish(&challenge)?,
     })
 }
 
@@ -135,8 +164,10 @@ pub(crate) fn build<R: RngCore + CryptoRng>(
 /// the verifier's OWN stored request and trusted keys. The original service
 /// must consume that request's challenge exactly once on successful admission.
 pub fn verify_root_board(
-    issuers: &[IssuerPublicKey], request: &RootBoardRequest,
-    presentation: &RootBoardPresentation, now: Timestamp,
+    issuers: &[IssuerPublicKey],
+    request: &RootBoardRequest,
+    presentation: &RootBoardPresentation,
+    now: Timestamp,
 ) -> Result<Pseudonym, Error> {
     request.current(now)?;
     let issuer = global_issuer(issuers, &presentation.global_key, &request.root)?;
@@ -144,14 +175,22 @@ pub fn verify_root_board(
     let point = presentation.pseudonym.point()?;
     let mut t = transcript(issuer, request);
     t.append_message(b"credential", b"global");
-    presentation.global.contribute(issuer, &request.global, &point, &mut t)?;
+    presentation
+        .global
+        .contribute(issuer, &request.global, &point, &mut t)?;
     t.append_message(b"credential", b"root-board");
-    presentation.root.contribute(&request.root.issuer, &root_request, &point, &mut t)?;
+    presentation
+        .root
+        .contribute(&request.root.issuer, &root_request, &point, &mut t)?;
     let challenge = t.challenge_scalar::<Fr>(b"challenge");
     if presentation.global.pseudonym.response != presentation.root.pseudonym.response {
         return Err(Error::InvalidRootBoard);
     }
-    presentation.global.verify_challenge(issuer, &request.global, &point, &challenge)?;
-    presentation.root.verify_challenge(&request.root.issuer, &root_request, &point, &challenge)?;
+    presentation
+        .global
+        .verify_challenge(issuer, &request.global, &point, &challenge)?;
+    presentation
+        .root
+        .verify_challenge(&request.root.issuer, &root_request, &point, &challenge)?;
     Ok(presentation.pseudonym)
 }

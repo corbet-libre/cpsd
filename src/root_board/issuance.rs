@@ -1,6 +1,9 @@
 use ark_bls12_381::{Fr, G1Affine};
 use ark_ec::AffineRepr;
-use ark_std::{UniformRand, rand::{CryptoRng, RngCore}};
+use ark_std::{
+    UniformRand,
+    rand::{CryptoRng, RngCore},
+};
 use dock_crypto_utils::transcript::{MerlinTranscript, Transcript};
 use schnorr_pok::discrete_log::{PokPedersenCommitment, PokPedersenCommitmentProtocol};
 
@@ -8,8 +11,10 @@ use super::{RootBoardPublicKey, global_issuer, state::RootBoardPending};
 use crate::{
     BlindPassport, CommunityId, Error, IssuanceChallenge, IssuerKey, IssuerPublicKey, KeyId,
     Passport, PendingIssuance, PresentationRequest, Pseudonym, Timestamp,
-    params::IDX_SECRET, presentation::check_request,
-    proof::{PresentationProof, PresentationProtocol}, wire::{Kind, Reader, Writer},
+    params::IDX_SECRET,
+    presentation::check_request,
+    proof::{PresentationProof, PresentationProtocol},
+    wire::{Kind, Reader, Writer},
 };
 
 /// Verifier-owned source request, authenticated common root descriptor and fresh
@@ -25,29 +30,51 @@ impl RootBoardIssuanceContext {
     /// Create and store before sending to the holder. The root issuer's service
     /// retains this exact context through its original nonce/role transaction.
     pub fn new<R: RngCore + CryptoRng>(
-        rng: &mut R, source: PresentationRequest, root: RootBoardPublicKey,
+        rng: &mut R,
+        source: PresentationRequest,
+        root: RootBoardPublicKey,
     ) -> Result<Self, Error> {
         Self::assemble(source, root, IssuanceChallenge::generate(rng))
     }
 
-    fn assemble(source: PresentationRequest, root: RootBoardPublicKey, nonce: IssuanceChallenge) -> Result<Self, Error> {
+    fn assemble(
+        source: PresentationRequest,
+        root: RootBoardPublicKey,
+        nonce: IssuanceChallenge,
+    ) -> Result<Self, Error> {
         root.current(source.now())?;
-        if source.community() == root.community() { return Err(Error::InvalidRootBoard); }
-        Ok(Self { source, root, nonce })
+        if source.community() == root.community() {
+            return Err(Error::InvalidRootBoard);
+        }
+        Ok(Self {
+            source,
+            root,
+            nonce,
+        })
     }
 
     /// Original source request; it must also be authenticated on the device.
-    pub fn source_request(&self) -> &PresentationRequest { &self.source }
+    pub fn source_request(&self) -> &PresentationRequest {
+        &self.source
+    }
     /// Common root key and cohort.
-    pub fn root(&self) -> &RootBoardPublicKey { &self.root }
+    pub fn root(&self) -> &RootBoardPublicKey {
+        &self.root
+    }
     /// Original service's one-use nonce key.
-    pub fn nonce(&self) -> [u8; 32] { self.nonce.to_bytes() }
+    pub fn nonce(&self) -> [u8; 32] {
+        self.nonce.to_bytes()
+    }
     /// Inclusive deadline, strictly before the root cohort's exclusive expiry.
-    pub fn deadline(&self) -> Timestamp { self.source.now() }
+    pub fn deadline(&self) -> Timestamp {
+        self.source.now()
+    }
 
     pub(crate) fn current(&self, now: Timestamp) -> Result<(), Error> {
         self.root.current(now)?;
-        if now > self.deadline() { return Err(Error::InvalidChallenge); }
+        if now > self.deadline() {
+            return Err(Error::InvalidChallenge);
+        }
         Ok(())
     }
 
@@ -102,8 +129,16 @@ impl RootBoardIssuanceRequest {
         let passport = r.proof()?;
         let opening = r.ark("root opening proof")?;
         r.finish()?;
-        if commitment.is_zero() { return Err(Error::InvalidRootBoard); }
-        Ok(Self { global_key, source_pseudonym, commitment, passport, opening })
+        if commitment.is_zero() {
+            return Err(Error::InvalidRootBoard);
+        }
+        Ok(Self {
+            global_key,
+            source_pseudonym,
+            commitment,
+            passport,
+            opening,
+        })
     }
 }
 
@@ -115,19 +150,29 @@ fn transcript(issuer: &IssuerPublicKey, context: &RootBoardIssuanceContext) -> M
 }
 
 fn opening_contribution(
-    root: &RootBoardPublicKey, commitment: &G1Affine, t: &G1Affine, transcript: &mut MerlinTranscript,
+    root: &RootBoardPublicKey,
+    commitment: &G1Affine,
+    t: &G1Affine,
+    transcript: &mut MerlinTranscript,
 ) -> Result<(), Error> {
     let params = root.issuer.signature_params();
     let mut bytes = Vec::new();
     PokPedersenCommitmentProtocol::compute_challenge_contribution(
-        &params.h_0, &params.h[IDX_SECRET], commitment, t, &mut bytes,
-    ).map_err(|_| Error::InvalidRootBoard)?;
+        &params.h_0,
+        &params.h[IDX_SECRET],
+        commitment,
+        t,
+        &mut bytes,
+    )
+    .map_err(|_| Error::InvalidRootBoard)?;
     transcript.append_message(b"root-opening", &bytes);
     Ok(())
 }
 
 pub(crate) fn request<R: RngCore + CryptoRng>(
-    rng: &mut R, passport: &Passport, context: &RootBoardIssuanceContext,
+    rng: &mut R,
+    passport: &Passport,
+    context: &RootBoardIssuanceContext,
 ) -> Result<(RootBoardIssuanceRequest, RootBoardPending), Error> {
     request_for_opening(rng, passport, &passport.secret, context)
 }
@@ -136,7 +181,9 @@ pub(crate) fn request<R: RngCore + CryptoRng>(
 /// build a hostile request that commits to another secret; production callers
 /// always pass the passport's own secret through [`request`].
 pub(crate) fn request_for_opening<R: RngCore + CryptoRng>(
-    rng: &mut R, passport: &Passport, opening_secret: &crate::HolderSecret,
+    rng: &mut R,
+    passport: &Passport,
+    opening_secret: &crate::HolderSecret,
     context: &RootBoardIssuanceContext,
 ) -> Result<(RootBoardIssuanceRequest, RootBoardPending), Error> {
     context.root.distinct_from(passport.issuer())?;
@@ -144,21 +191,38 @@ pub(crate) fn request_for_opening<R: RngCore + CryptoRng>(
     let blinding = Fr::rand(rng);
     let shared = Fr::rand(rng);
     let params = context.root.issuer.signature_params();
-    let commitment = params.commit_to_messages([(IDX_SECRET, &opening_secret.0)], &blinding)
+    let commitment = params
+        .commit_to_messages([(IDX_SECRET, &opening_secret.0)], &blinding)
         .map_err(|_| Error::ProofGeneration)?;
-    if commitment.is_zero() { return Err(Error::ProofGeneration); }
+    if commitment.is_zero() {
+        return Err(Error::ProofGeneration);
+    }
     let source_pseudonym = passport.pseudonym(context.source.community());
-    let protocol = PresentationProtocol::new(rng, passport, &context.source, &source_pseudonym.point()?, shared)?;
+    let protocol = PresentationProtocol::new(
+        rng,
+        passport,
+        &context.source,
+        &source_pseudonym.point()?,
+        shared,
+    )?;
     let opening = PokPedersenCommitmentProtocol::init(
-        blinding, Fr::rand(rng), &params.h_0, opening_secret.0, shared, &params.h[IDX_SECRET],
+        blinding,
+        Fr::rand(rng),
+        &params.h_0,
+        opening_secret.0,
+        shared,
+        &params.h[IDX_SECRET],
     );
     let mut t = transcript(passport.issuer(), context);
     protocol.contribute(&mut t)?;
     opening_contribution(&context.root, &commitment, &opening.t, &mut t)?;
     let challenge = t.challenge_scalar::<Fr>(b"challenge");
     let request = RootBoardIssuanceRequest {
-        global_key: passport.key_id().clone(), source_pseudonym, commitment,
-        passport: protocol.finish(&challenge)?, opening: opening.gen_proof(&challenge),
+        global_key: passport.key_id().clone(),
+        source_pseudonym,
+        commitment,
+        passport: protocol.finish(&challenge)?,
+        opening: opening.gen_proof(&challenge),
     };
     let pending = RootBoardPending {
         descriptor: context.root.clone(),
@@ -178,37 +242,71 @@ pub struct VerifiedRootBoardIssuance {
 
 impl VerifiedRootBoardIssuance {
     /// Compare with the original current admin/root lease's source community.
-    pub fn source_community(&self) -> &CommunityId { self.context.source.community() }
+    pub fn source_community(&self) -> &CommunityId {
+        self.context.source.community()
+    }
     /// Compare with that same lease's member; never pair with a root pseudonym.
-    pub fn source_pseudonym(&self) -> Pseudonym { self.source_pseudonym }
+    pub fn source_pseudonym(&self) -> Pseudonym {
+        self.source_pseudonym
+    }
     /// Consume through the issuer service's original one-use nonce transaction.
-    pub fn nonce(&self) -> [u8; 32] { self.context.nonce() }
+    pub fn nonce(&self) -> [u8; 32] {
+        self.context.nonce()
+    }
     /// Recheck with the source lease after awaits and before signing.
-    pub fn deadline(&self) -> Timestamp { self.context.deadline() }
+    pub fn deadline(&self) -> Timestamp {
+        self.context.deadline()
+    }
     /// Exact authenticated common descriptor whose issuance was proved.
-    pub fn root(&self) -> &RootBoardPublicKey { &self.context.root }
+    pub fn root(&self) -> &RootBoardPublicKey {
+        &self.context.root
+    }
 }
 
 /// Verify against the service's OWN stored context and trusted global key ring.
 /// This function establishes only cryptographic holder binding, never a role.
 pub fn verify_root_board_issuance(
-    issuers: &[IssuerPublicKey], context: &RootBoardIssuanceContext,
-    request: &RootBoardIssuanceRequest, now: Timestamp,
+    issuers: &[IssuerPublicKey],
+    context: &RootBoardIssuanceContext,
+    request: &RootBoardIssuanceRequest,
+    now: Timestamp,
 ) -> Result<VerifiedRootBoardIssuance, Error> {
     context.current(now)?;
     let issuer = global_issuer(issuers, &request.global_key, &context.root)?;
-    if request.commitment.is_zero() { return Err(Error::InvalidRootBoard); }
+    if request.commitment.is_zero() {
+        return Err(Error::InvalidRootBoard);
+    }
     let mut t = transcript(issuer, context);
     let nym = request.source_pseudonym.point()?;
-    request.passport.contribute(issuer, &context.source, &nym, &mut t)?;
-    opening_contribution(&context.root, &request.commitment, &request.opening.t, &mut t)?;
+    request
+        .passport
+        .contribute(issuer, &context.source, &nym, &mut t)?;
+    opening_contribution(
+        &context.root,
+        &request.commitment,
+        &request.opening.t,
+        &mut t,
+    )?;
     let challenge = t.challenge_scalar::<Fr>(b"challenge");
     let params = context.root.issuer.signature_params();
     if request.opening.response2 != request.passport.pseudonym.response
-        || !request.opening.verify(&request.commitment, &params.h_0, &params.h[IDX_SECRET], &challenge)
-    { return Err(Error::InvalidRootBoard); }
-    request.passport.verify_challenge(issuer, &context.source, &nym, &challenge)?;
-    Ok(VerifiedRootBoardIssuance { context: context.clone(), source_pseudonym: request.source_pseudonym, commitment: request.commitment })
+        || !request.opening.verify(
+            &request.commitment,
+            &params.h_0,
+            &params.h[IDX_SECRET],
+            &challenge,
+        )
+    {
+        return Err(Error::InvalidRootBoard);
+    }
+    request
+        .passport
+        .verify_challenge(issuer, &context.source, &nym, &challenge)?;
+    Ok(VerifiedRootBoardIssuance {
+        context: context.clone(),
+        source_pseudonym: request.source_pseudonym,
+        commitment: request.commitment,
+    })
 }
 
 /// Blinded root credential, usable only with the actual retained holder opening.
@@ -231,7 +329,9 @@ impl BlindRootBoardCredential {
         let descriptor = RootBoardPublicKey::from_bytes(r.bytes()?)?;
         let blind = BlindPassport::from_bytes(r.bytes()?)?;
         r.finish()?;
-        if blind.key_id() != descriptor.issuer.key_id() || blind.attributes() != &descriptor.attributes() {
+        if blind.key_id() != descriptor.issuer.key_id()
+            || blind.attributes() != &descriptor.attributes()
+        {
             return Err(Error::InvalidRootBoard);
         }
         Ok(Self { descriptor, blind })
@@ -242,13 +342,19 @@ impl BlindRootBoardCredential {
 /// The enclosing original service owns admin-lease/current-clock/nonce CAS.
 /// Consumes the proof capability and accepts no caller-selected attributes.
 pub fn issue_blind_root_board<R: RngCore + CryptoRng>(
-    rng: &mut R, issuer: &IssuerKey, expected: &RootBoardPublicKey,
-    verified: VerifiedRootBoardIssuance, now: Timestamp,
+    rng: &mut R,
+    issuer: &IssuerKey,
+    expected: &RootBoardPublicKey,
+    verified: VerifiedRootBoardIssuance,
+    now: Timestamp,
 ) -> Result<BlindRootBoardCredential, Error> {
     verified.context.current(now)?;
     if &verified.context.root != expected || issuer.public_key() != &expected.issuer {
         return Err(Error::InvalidRootBoard);
     }
     let blind = issuer.issue_commitment(rng, &verified.commitment, &expected.attributes())?;
-    Ok(BlindRootBoardCredential { descriptor: expected.clone(), blind })
+    Ok(BlindRootBoardCredential {
+        descriptor: expected.clone(),
+        blind,
+    })
 }

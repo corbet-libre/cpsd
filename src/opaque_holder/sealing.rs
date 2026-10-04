@@ -1,8 +1,8 @@
 //! Private holder encoding and maintained AEAD; no storage or key derivation.
 use super::OpaqueHolder;
 use crate::rand::{CryptoRng, RngCore};
-use crate::wire::{Kind, MAX_ENCODED_LEN, Reader, Writer};
 use crate::root_board::state::RootBoardState;
+use crate::wire::{Kind, MAX_ENCODED_LEN, Reader, Writer};
 use crate::{Error, HolderSecret, Passport, PendingIssuance};
 use chacha20poly1305::{
     KeyInit, XChaCha20Poly1305, XNonce,
@@ -103,7 +103,11 @@ impl OpaqueHolder {
         // immutable key and context; no reader guesses a format.
         let root = (!self.root_board.is_empty()).then(|| self.root_board.to_bytes());
         let root = root.as_deref().map(Vec::as_slice);
-        let length = 6 + 12 + secret.len() + pending.len() + passport.len()
+        let length = 6
+            + 12
+            + secret.len()
+            + pending.len()
+            + passport.len()
             + root.map_or(0, |root| 4 + root.len());
         if length > MAX_ENCODED_LEN - 50 {
             return Err(Error::InvalidSealedHolder);
@@ -175,7 +179,11 @@ impl OpaqueHolder {
         let secret = HolderSecret::from_bytes(reader.bytes()?)?;
         let pending = reader.bytes()?;
         let passport = reader.bytes()?;
-        let root = if extended { Some(reader.bytes()?) } else { None };
+        let root = if extended {
+            Some(reader.bytes()?)
+        } else {
+            None
+        };
         reader.finish()?;
         let pending = (!pending.is_empty())
             .then(|| PendingIssuance::from_bytes(pending))
