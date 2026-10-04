@@ -183,6 +183,127 @@ impl World {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
+fn valid_root_signatures_do_not_make_other_payload_types_authoritative() {
+    let mut w = world();
+    let mut holder = w.holder();
+    w.passport(&mut holder);
+    let blind = w.issue(&mut holder);
+    holder.finish_root_board_issuance(&blind).unwrap();
+    let context = w.context();
+    let (_, signed_source) = w.signed_context(&context);
+    let (request, signed_request) = w.request();
+
+    // Each envelope has the expected signer, kind and exclusive expiry, but
+    // the typed payload belongs to a different operation.
+    assert_eq!(
+        w.expected
+            .authenticate_root_board_issuance(
+                &signed_request,
+                &w.expected_source,
+                &signed_source,
+                NOW,
+            )
+            .err(),
+        Some(Error::InvalidPresentationRequest)
+    );
+    assert!(matches!(
+        holder.begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &signed_request,
+            &w.expected_source,
+            &signed_source,
+            NOW,
+        ),
+        Err(Error::InvalidPresentationRequest)
+    ));
+    for payload in [context.to_bytes(), context.source_request().to_bytes()] {
+        let signed = sign(&mut w.signer, &payload, request.deadline());
+        assert_eq!(
+            w.expected
+                .authenticate_root_board_request(&signed, NOW)
+                .err(),
+            Some(Error::InvalidPresentationRequest)
+        );
+        assert!(matches!(
+            holder.present_root_board(&mut w.rng, &w.expected, &signed, NOW,),
+            Err(Error::InvalidPresentationRequest)
+        ));
+    }
+    let proof = holder
+        .present_root_board(&mut w.rng, &w.expected, &signed_request, NOW)
+        .unwrap();
+    verify_root_board(&[w.global.public_key().clone()], &request, &proof, NOW).unwrap();
+    // Failed authentication did not install a pending opening or remove the
+    // existing credential: a full honest renewal still completes.
+    let renewed = w.issue(&mut holder);
+    holder.finish_root_board_issuance(&renewed).unwrap();
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn root_payload_deadlines_cannot_be_extended_by_live_cose_envelopes() {
+    let mut w = world();
+    let mut holder = w.holder();
+    w.passport(&mut holder);
+    let blind = w.issue(&mut holder);
+    holder.finish_root_board_issuance(&blind).unwrap();
+    let context = w.context();
+    let (_, signed_source) = w.signed_context(&context);
+    let (request, original) = w.request();
+    let extended_context = sign(&mut w.signer, &context.to_bytes(), context.deadline() + 5);
+    let extended_request = sign(&mut w.signer, &request.to_bytes(), request.deadline() + 5);
+    let late = NOW + 1;
+    // Verify the envelopes really are live at the tested instant; refusal must
+    // enforce the inner deadline before the independently signed source request.
+    for signed in [&extended_context, &extended_request] {
+        w.signer
+            .key_ring()
+            .verify(signed, csgn::Kind::Credential, late)
+            .unwrap();
+    }
+    assert_eq!(
+        w.expected
+            .authenticate_root_board_issuance(
+                &extended_context,
+                &w.expected_source,
+                &signed_source,
+                late,
+            )
+            .err(),
+        Some(Error::InvalidPresentationRequest)
+    );
+    assert!(matches!(
+        holder.begin_root_board_issuance(
+            &mut w.rng,
+            &w.expected,
+            &extended_context,
+            &w.expected_source,
+            &signed_source,
+            late,
+        ),
+        Err(Error::InvalidPresentationRequest)
+    ));
+    assert_eq!(
+        w.expected
+            .authenticate_root_board_request(&extended_request, late)
+            .err(),
+        Some(Error::InvalidPresentationRequest)
+    );
+    assert!(matches!(
+        holder.present_root_board(&mut w.rng, &w.expected, &extended_request, late,),
+        Err(Error::InvalidPresentationRequest)
+    ));
+    let proof = holder
+        .present_root_board(&mut w.rng, &w.expected, &original, NOW)
+        .unwrap();
+    verify_root_board(&[w.global.public_key().clone()], &request, &proof, NOW).unwrap();
+    let renewed = w.issue(&mut holder);
+    holder.finish_root_board_issuance(&renewed).unwrap();
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
 fn issuance_seal_restore_and_joint_presentation_use_one_hidden_secret() {
     let mut w = world();
     let mut holder = w.holder();

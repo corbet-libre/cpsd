@@ -198,7 +198,102 @@ async fn unavailable_schema_fails_closed_without_leaking_database_errors() {
         store.consume([1; 32], [2; 32], 10).await,
         Err(Error::Storage)
     );
+    assert_eq!(
+        store.matches([1; 32], [2; 32], 10).await,
+        Err(Error::Storage)
+    );
+    assert_eq!(store.prune(200).await, Err(Error::Storage));
+    assert_eq!(store.check_indexes().await, Err(Error::Storage));
+    assert_eq!(store.check_issuance_indexes().await, Err(Error::Storage));
     assert_eq!(Error::Storage.to_string(), "challenge storage failed");
+    // Installing the real missing schema restores the same store's contract.
+    db.migrate(&[Migration::new(1, "community challenges", SCHEMA)])
+        .await
+        .unwrap();
+    store.check_indexes().await.unwrap();
+    contract(&store).await;
+}
+
+#[tokio::test]
+async fn missing_issuer_registry_preserves_challenge_until_schema_is_ready() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Db::open(Config::new(
+        format!("file://{}", directory.path().join("issuer.db").display()),
+        "",
+    ))
+    .await
+    .unwrap();
+    db.migrate(&[Migration::new(1, "cpsd challenges", SCHEMA)])
+        .await
+        .unwrap();
+    let store = LibsqlStore::new(&db, scope("global"), 10).unwrap();
+    let mut rng = StdRng::seed_from_u64(902);
+    let issuer = IssuerKey::generate(&mut rng, KeyId::new("issuer").unwrap(), vec![]).unwrap();
+    let auth = AuthenticatedIssuance::new([7; 32], [8; 32]);
+    let secret = HolderSecret::generate(&mut rng);
+    let nonce = issuance_challenge(&mut rng, &store, issuer.public_key(), &auth, 100)
+        .await
+        .unwrap();
+    let (request, pending) = request_issue(&mut rng, &secret, issuer.public_key(), &nonce).unwrap();
+    let attributes = PassportAttributes::new(300, 1);
+    for _ in 0..2 {
+        assert_eq!(
+            issue_blind_once(
+                &mut rng,
+                &store,
+                &issuer,
+                &auth,
+                &request,
+                &nonce,
+                &attributes,
+                90,
+            )
+            .await
+            .err(),
+            Some(Error::Storage)
+        );
+    }
+    assert_eq!(store.check_issuance_indexes().await, Err(Error::Storage));
+    db.migrate(&[
+        Migration::new(1, "cpsd challenges", SCHEMA),
+        Migration::new(2, "issuer continuity", ISSUANCE_SCHEMA),
+        Migration::new(3, "unique issuer tags", ISSUANCE_UNIQUENESS_SCHEMA),
+    ])
+    .await
+    .unwrap();
+    store.check_issuance_indexes().await.unwrap();
+    let blind = issue_blind_once(
+        &mut rng,
+        &store,
+        &issuer,
+        &auth,
+        &request,
+        &nonce,
+        &attributes,
+        90,
+    )
+    .await
+    .unwrap();
+    let passport = pending.finish(&blind).unwrap();
+    assert_eq!(
+        passport.pseudonym(&scope("community")),
+        secret.pseudonym(&scope("community"))
+    );
+    assert_eq!(
+        issue_blind_once(
+            &mut rng,
+            &store,
+            &issuer,
+            &auth,
+            &request,
+            &nonce,
+            &attributes,
+            90,
+        )
+        .await
+        .err(),
+        Some(Error::InvalidChallenge)
+    );
 }
 
 async fn end_to_end(
