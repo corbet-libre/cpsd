@@ -25,6 +25,10 @@ commands = [["bash", ".ci/coverage-diagnostic.sh"]]
 kind = "commands"
 commands = [["bash", ".ci/check.sh", "dependency-policy"]]
 
+[checks.fuzz-diagnostic]
+kind = "commands"
+commands = [["bash", ".ci/fuzz-diagnostic.sh"]]
+
 [checks.acceptance-preflight]
 kind = "commands"
 commands = [["python3", ".ci/acceptance.py", "preflight"]]

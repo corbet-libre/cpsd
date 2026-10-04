@@ -1,0 +1,24 @@
+{
+  "files": {
+    "noncanonical-infinity": "aae0bfd06bfa08eb1ab842db32b5d3c2cb530e558130cc0e6fe3143cf1509d81",
+    "root-board-independent-0": "3ae9eff512fb682f5fd4257ba3082d2eb74243878836346026d64d364e5e8b4a",
+    "root-board-independent-1": "b4e5cc069443c5e320a6dcb3693cd19711fa3645d7e5676a9d5fce94f9ace74f",
+    "root-board-independent-2": "8b45cbee41b0ac0eaf7cc38ef5e87c25f56c1f9d1a1a45a0ca7f7fb462af492f",
+    "root-board-independent-3": "770eac7236a5fd1c6a43e7768762274b63dc3a80c622aae0f8297e4711070f63",
+    "root-board-independent-4": "ed0ffc65589913b3e1c44949447581c077eea61cf10570c57f17dd948bb412ae",
+    "root-board-independent-5": "5ff4148062b4c1617a8e31b3a88663fad7199e860f265402d6df26823530f190",
+    "scalar-modulus": "92058ef667278a2fa94924fd586f247a5a899701e77ba145be5d889c2f042fb0",
+    "valid-0": "4b717cf60b5cb8c880d2b014479879a97cf560f8aebaa16c526ca49e94cde26c",
+    "valid-1": "4d69efb9319b5086cfcddbc5d513e88a2fd366a81cf0c082b24192573839dfce",
+    "valid-2": "dea59553c692315816a5207d615ad9cdca1f6123a8823d9d52cc0e0cbb2bd6c5",
+    "valid-3": "88d6bc1209a32c65769b41cbd8d4f0ad34b5d4235d46ce6ba8607a1e89e192f4",
+    "valid-4": "99a6985128cc54c3697f0d568965f9fbcd3615deeded92baa08cf0543cc87485",
+    "valid-5": "7378cce2c60b2fb1a6ff3435cae63c96d38d42ceb9aa362c976d267556d8422c",
+    "valid-6": "e71fab225a942517f2c8096459ecfeb0d2b00b8cf7256a0b403ac752f5dacf1e",
+    "valid-7": "1ceff0f7140d52eda93d6d3bdeacb8a66a3d0b2829f25578229c617826ca01ec",
+    "valid-8": "d0f4d94cad42586eaf5194a573c3dcb7c447263a09e448740ca6539c73c2977d",
+    "valid-9": "ed0f5a349efdadf905f9ccdebac3c56dea21dcb9295d0695e772f2bce23e34ad"
+  },
+  "implementation_sha256": "2631c2e430b7b0534bfc071954ca71d4e3b211d6afcc6d889f5d1ffa5a52f239",
+  "source_commit": "6b49131030f417e55183b438707b461b1b0e5955"
+}
