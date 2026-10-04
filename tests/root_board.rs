@@ -974,9 +974,34 @@ fn root_key_must_be_distinct_from_unselected_global_ring_entries() {
         vec![w.phone.clone()],
     )
     .unwrap();
+    // A published key can carry a fresh label while retaining the exact BBS
+    // key bytes. Root/global separation must compare the key material too.
+    let original = w.root_key.public_key().to_bytes();
+    let mut relabeled = original.clone();
+    let label_length = u32::from_be_bytes(original[6..10].try_into().unwrap()) as usize;
+    let alias_label = b"root-board-2";
+    assert_eq!(label_length, alias_label.len());
+    assert_eq!(
+        &original[10..10 + label_length],
+        w.root_key.public_key().key_id().as_str().as_bytes()
+    );
+    relabeled[10..10 + label_length].copy_from_slice(alias_label);
+    assert_eq!(
+        &relabeled[10 + label_length..],
+        &original[10 + label_length..]
+    );
+    let same_key_different_id = IssuerPublicKey::from_bytes(&relabeled).unwrap();
+    assert_ne!(
+        same_key_different_id.key_id(),
+        w.root_key.public_key().key_id()
+    );
     // Both proofs genuinely select global, which is distinct from the root.
     // Adding an unused ring entry must still enforce the root/global boundary.
-    for unused in [w.root_key.public_key(), same_id_different_key.public_key()] {
+    for unused in [
+        w.root_key.public_key(),
+        same_id_different_key.public_key(),
+        &same_key_different_id,
+    ] {
         let ring = [global.clone(), unused.clone()];
         assert_eq!(
             verify_root_board_issuance(&ring, &context, &issuance, NOW).err(),
