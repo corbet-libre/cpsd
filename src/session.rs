@@ -81,6 +81,57 @@ impl<S: ChallengeStore> Verifier<S> {
         Ok(request)
     }
 
+    /// Reserve the complete service-created joint request in the same bounded
+    /// replay store. The descriptor is supplied by authenticated root policy.
+    /// A passport-only request cannot occupy or consume this purpose's slot.
+    pub async fn register_root_board_request(
+        &self,
+        request: RootBoardRequest,
+    ) -> Result<RootBoardRequest, Error> {
+        if request.global_request().community() != self.store.community() {
+            return Err(Error::InvalidChallenge);
+        }
+        let record = ChallengeRecord {
+            nonce: request.global_request().challenge(),
+            binding: root_board_binding(&request),
+            expires: request.deadline(),
+        };
+        if !self.store.reserve(record).await? {
+            return Err(Error::ChallengeConflict);
+        }
+        Ok(request)
+    }
+
+    /// Verify both credentials and consume their exact joint challenge once.
+    /// Current descriptor/policy selection stays with the service; this method
+    /// checks the configured community, current global epoch and original keys.
+    /// Invalid proofs leave the challenge available for its legitimate holder.
+    pub async fn verify_root_board(
+        &self,
+        request: &RootBoardRequest,
+        proof: &RootBoardPresentation,
+        epoch: u64,
+        now: Timestamp,
+    ) -> Result<Pseudonym, Error> {
+        check_timestamp(now)?;
+        let global = request.global_request();
+        if global.community() != self.store.community() || now > request.deadline() {
+            return Err(Error::InvalidChallenge);
+        }
+        if global.policy_epoch() != epoch {
+            return Err(Error::WrongEpoch);
+        }
+        let binding = root_board_binding(request);
+        if !self.store.matches(global.challenge(), binding, now).await? {
+            return Err(Error::InvalidChallenge);
+        }
+        let pseudonym = crate::verify_root_board(&self.keys, request, proof, now)?;
+        if !self.store.consume(global.challenge(), binding, now).await? {
+            return Err(Error::InvalidChallenge);
+        }
+        Ok(pseudonym)
+    }
+
     /// Verify, then atomically consume the challenge before returning a pseudonym.
     /// Invalid proofs do not consume a challenge. Concurrent valid submissions
     /// yield at most one success. `epoch`/`now` are authoritative service values.
@@ -128,6 +179,10 @@ impl<S: ChallengeStore> Verifier<S> {
 
 fn presentation_binding(request: &PresentationRequest) -> [u8; 32] {
     binding(b"cpsd/v1/presentation-slot", &[&request.to_bytes()])
+}
+
+fn root_board_binding(request: &RootBoardRequest) -> [u8; 32] {
+    binding(b"cpsd/v3/root-board-slot", &[&request.to_bytes()])
 }
 
 /// Reserve an issuance nonce in the global issuer's separate challenge store.

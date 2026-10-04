@@ -182,6 +182,192 @@ impl World {
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+async fn joint_request_replay_slot_binds_the_complete_root_descriptor() {
+    let mut w = world();
+    let mut holder = w.holder();
+    w.passport(&mut holder);
+    let blind = w.issue(&mut holder);
+    holder.finish_root_board_issuance(&blind).unwrap();
+    let (request, signed) = w.request();
+    let proof = holder
+        .present_root_board(&mut w.rng, &w.expected, &signed, NOW)
+        .unwrap();
+    let store = MemoryStore::new(w.root_community.clone(), 4).unwrap();
+    let verifier = Verifier::new(store, vec![w.global.public_key().clone()]).unwrap();
+    let wrong_scope = Verifier::new(
+        MemoryStore::new(w.source.clone(), 4).unwrap(),
+        vec![w.global.public_key().clone()],
+    )
+    .unwrap();
+    assert!(matches!(
+        wrong_scope
+            .register_root_board_request(request.clone())
+            .await,
+        Err(Error::InvalidChallenge)
+    ));
+    assert!(matches!(
+        wrong_scope
+            .verify_root_board(&request, &proof, 7, NOW)
+            .await,
+        Err(Error::InvalidChallenge)
+    ));
+    assert!(matches!(
+        verifier.verify_root_board(&request, &proof, 7, NOW).await,
+        Err(Error::InvalidChallenge)
+    ));
+    verifier
+        .register_root_board_request(request.clone())
+        .await
+        .unwrap();
+    assert!(matches!(
+        verifier.register_root_board_request(request.clone()).await,
+        Err(Error::ChallengeConflict)
+    ));
+    assert!(matches!(
+        verifier.verify_root_board(&request, &proof, 8, NOW).await,
+        Err(Error::WrongEpoch)
+    ));
+    assert!(matches!(
+        verifier
+            .verify_root_board(&request, &proof, 7, NOW + 1)
+            .await,
+        Err(Error::InvalidChallenge)
+    ));
+    let altered = RootBoardRequest::new(
+        request.global_request().clone(),
+        RootBoardPublicKey::from_authenticated_beacon(
+            w.root_key.public_key().clone(),
+            w.root_community.clone(),
+            4,
+            0,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        verifier.verify_root_board(&altered, &proof, 7, NOW).await,
+        Err(Error::InvalidChallenge)
+    ));
+    // A separately valid joint proof cannot consume this request's challenge.
+    let (_, other_signed) = w.request();
+    let other = holder
+        .present_root_board(&mut w.rng, &w.expected, &other_signed, NOW)
+        .unwrap();
+    assert!(
+        verifier
+            .verify_root_board(&request, &other, 7, NOW)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        verifier
+            .verify_root_board(&request, &proof, 7, NOW)
+            .await
+            .unwrap(),
+        holder.pseudonym(&w.root_community),
+    );
+    assert!(matches!(
+        verifier.verify_root_board(&request, &proof, 7, NOW).await,
+        Err(Error::InvalidChallenge)
+    ));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+async fn ordinary_passport_and_joint_root_challenges_cannot_be_interchanged() {
+    let mut w = world();
+    let mut holder = w.holder();
+    w.passport(&mut holder);
+    let blind = w.issue(&mut holder);
+    holder.finish_root_board_issuance(&blind).unwrap();
+    let store = MemoryStore::new(w.root_community.clone(), 4).unwrap();
+    let verifier = Verifier::new(store, vec![w.global.public_key().clone()]).unwrap();
+    let global = verifier
+        .request_for_epoch(&mut w.rng, 7, [w.phone.clone()], NOW, EXPIRY)
+        .await
+        .unwrap();
+    let request = RootBoardRequest::new(global.clone(), w.descriptor.clone()).unwrap();
+    let signed = sign(&mut w.signer, &request.to_bytes(), NOW);
+    let proof = holder
+        .present_root_board(&mut w.rng, &w.expected, &signed, NOW)
+        .unwrap();
+    assert!(matches!(
+        verifier.verify_root_board(&request, &proof, 7, NOW).await,
+        Err(Error::InvalidChallenge)
+    ));
+    assert!(matches!(
+        verifier.register_root_board_request(request).await,
+        Err(Error::ChallengeConflict)
+    ));
+    let (joint, _) = w.request();
+    verifier
+        .register_root_board_request(joint.clone())
+        .await
+        .unwrap();
+    let signed_global = sign(&mut w.signer, &joint.global_request().to_bytes(), NOW);
+    let ordinary = holder
+        .present(&mut w.rng, &w.expected, &signed_global, NOW)
+        .unwrap();
+    assert!(matches!(
+        verifier
+            .verify(&mut w.rng, joint.global_request(), &ordinary, 7, NOW)
+            .await,
+        Err(Error::InvalidChallenge)
+    ));
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "storage"))]
+#[tokio::test]
+async fn joint_root_challenge_is_consumed_once_across_sql_handles_and_reopen() {
+    let mut w = world();
+    let mut holder = w.holder();
+    w.passport(&mut holder);
+    let blind = w.issue(&mut holder);
+    holder.finish_root_board_issuance(&blind).unwrap();
+    let (request, signed) = w.request();
+    let proof = holder
+        .present_root_board(&mut w.rng, &w.expected, &signed, NOW)
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let file = format!("file://{}", dir.path().join("root.db").display());
+    let db = crlt::Db::open(crlt::Config::new(&file, "")).await.unwrap();
+    db.migrate(&[crlt::Migration::new(1, "cpsd", storage::libsql::SCHEMA)])
+        .await
+        .unwrap();
+    let make = |db: &crlt::Db| {
+        Verifier::new(
+            storage::libsql::LibsqlStore::new(db, w.root_community.clone(), 4).unwrap(),
+            vec![w.global.public_key().clone()],
+        )
+        .unwrap()
+    };
+    let first = make(&db);
+    let second = make(&db);
+    first
+        .register_root_board_request(request.clone())
+        .await
+        .unwrap();
+    let (a, b) = tokio::join!(
+        first.verify_root_board(&request, &proof, 7, NOW),
+        second.verify_root_board(&request, &proof, 7, NOW),
+    );
+    assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
+    let success = a.or(b).unwrap();
+    assert_eq!(success, holder.pseudonym(&w.root_community));
+    drop(first);
+    drop(second);
+    drop(db);
+    let reopened = crlt::Db::open(crlt::Config::new(&file, "")).await.unwrap();
+    assert!(matches!(
+        make(&reopened)
+            .verify_root_board(&request, &proof, 7, NOW)
+            .await,
+        Err(Error::InvalidChallenge)
+    ));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn valid_root_signatures_do_not_make_other_payload_types_authoritative() {
     let mut w = world();
