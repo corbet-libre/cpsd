@@ -241,6 +241,10 @@ pub struct VerifiedRootBoardIssuance {
 }
 
 impl VerifiedRootBoardIssuance {
+    pub(crate) fn context(&self) -> &RootBoardIssuanceContext {
+        &self.context
+    }
+
     /// Compare with the original current admin/root lease's source community.
     pub fn source_community(&self) -> &CommunityId {
         self.context.source.community()

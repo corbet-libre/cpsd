@@ -12,6 +12,8 @@ second BBS+ credential over the SAME hidden holder secret as the global passport
 | `RootBoardIssuanceContext` | Verifier-owned: the source request, the common descriptor and a one-use nonce. Signed by the ROOT community ring as a csgn Credential (expiry = deadline + 1). The device separately authenticates the original source-signed request against its initiating SOURCE origin mapping and requires exact equality before proving. |
 | `RootBoardIssuanceRequest` | Joint proof from the holder: global passport possession, source pseudonym, and that the blinded commitment hides the same secret. The issuer sees only the source pseudonym and the commitment, never the root pseudonym. |
 | `VerifiedRootBoardIssuance` | Unforgeable result of `verify_root_board_issuance`. It is NOT a role verdict: the service must hold the current source admin lease and consume the nonce atomically before `issue_blind_root_board`. |
+| `register_root_board_issuance` / `verify_stored_root_board_issuance` | Reserve a fresh service-created context and require its complete purpose-separated digest in the original bounded root challenge store before the original proof check. Failed proofs do not consume it. |
+| `consume_root_board_issuance` / `ConsumedRootBoardIssuance` | Atomic compare/delete yields an opaque one-use signature-release capability. `issue` consumes it and delegates the original signer; it is NOT role/session authority. No source identity, proof or history is stored. |
 | `BlindRootBoardCredential` | The blind signature over the common cohort attributes only. No caller-chosen expiry or attribute. |
 | `RootBoardRequest` / `RootBoardPresentation` | Joint proof of the passport and the root credential with shared blinding and challenge, plus the root pseudonym. The request is signed by the root ring (expiry = deadline + 1). No source community, source pseudonym, role or issuance tag appears. |
 
@@ -46,9 +48,24 @@ contribution and `credential=root-board` with the root contribution. Both
 secret responses must be equal and each proof verifies against the shared
 challenge. No local response or verification equation exists.
 
+The session helpers bind the entire canonical issuance context under
+`cpsd/v3/root-board-issuance-slot`, distinct from presentation, root admission
+and global issuance. They share the existing root store's namespace and capacity;
+no schema or issuer-tag registry is added. Every attempt creates a fresh context;
+retired contexts must never be registered again because no tombstones are kept.
+
+After proof verification, the service retains the original matching source role
+lease, checks its live role, session, current policy and clock, then consumes the
+nonce. Only an acknowledged atomic deletion returns `ConsumedRootBoardIssuance`.
+The service reads its real clock again after that await before calling `issue`,
+and again before emitting the blind signature. A failed, cancelled or uncertain
+attempt releases nothing; a consumed nonce is never restored. `issue` also rejects
+a time earlier than consumption and delegates all signing to the existing pure
+`issue_blind_root_board` operation.
+
 ## Not established here
 
-The role itself (current source admin lease), nonce consumption, Beacon
+The role itself (current source admin lease), its binding to nonce consumption, Beacon
 authentication of the common descriptor, 30-day renewal scheduling and the
 issuer-side admission policy belong to the original services. Actual native and
 browser vectors, timing and an independent cryptographic review remain required.
