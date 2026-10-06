@@ -1,5 +1,6 @@
 schema = 1
 project = "cpsd"
+repository = "https://git.corbet.ch/corbet-foss/cpsd.git"
 
 [checks.verify]
 kind = "commands"
@@ -20,3 +21,10 @@ scheduler = "crow"
 checks = ["verify", "advisories"]
 workflow = "repository-jobs"
 command = ["bash", ".ci/run-cached.sh"]
+
+[push_consumer.cmsg-v01]
+consumer = "https://git.corbet.ch/corbet-libs/cmsg.git"
+branch = "v01"
+consumer_branch = "v01"
+job = "v01-push"
+self_name = "cpsd"

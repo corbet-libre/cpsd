@@ -9,7 +9,7 @@ license = "LGPL-3.0-only WITH LGPL-3.0-linking-exception"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "=0.4.13"
+libfuzzer-sys = "0.4.13"
 cpsd = { path = "..", default-features = false }
 
 [[bin]]

@@ -2,7 +2,7 @@
 //!
 //! `cpsd` is a thin facade over docknetwork's
 //! [`crypto`](https://github.com/docknetwork/crypto) crates (`bbs_plus`,
-//! `proof_system`, `bulletproofs_plus_plus`) for the `cvld` passport:
+//! `schnorr_pok`, `bulletproofs_plus_plus`) for the `cvld` passport:
 //!
 //! - **Blind issuance.** The holder commits to a random secret
 //!   ([`HolderSecret`]) and proves knowledge of it ([`request_issue`]); the
@@ -37,7 +37,9 @@ mod issuer;
 mod opaque_holder;
 mod params;
 mod presentation;
+mod proof;
 mod proof_wire;
+mod root_board;
 mod session;
 pub mod storage;
 mod wire;
@@ -57,8 +59,17 @@ pub use ids::{CommunityId, GateId, KeyId, MAX_COMMUNITY_ID_LEN, MAX_ID_LEN};
 pub use issuer::{
     BlindPassport, IssuanceChallenge, IssuanceRequest, IssuerKey, IssuerPublicKey, IssuerTag,
 };
-pub use opaque_holder::OpaqueHolder;
+pub use opaque_holder::{OpaqueHolder, SealedHolder};
 pub use presentation::{Presentation, PresentationRequest, Pseudonym, present, verify};
+pub use root_board::{
+    BlindRootBoardCredential, ROOT_BOARD_COHORT_SECONDS, RootBoardIssuanceContext,
+    RootBoardIssuanceRequest, RootBoardPresentation, RootBoardPublicKey, RootBoardRequest,
+    VerifiedRootBoardIssuance, issue_blind_root_board, verify_root_board,
+    verify_root_board_issuance,
+};
 
-pub use session::{Verifier, issuance_challenge, issue_blind_once};
+pub use session::{
+    ConsumedRootBoardIssuance, Verifier, consume_root_board_issuance, issuance_challenge,
+    issue_blind_once, register_root_board_issuance, verify_stored_root_board_issuance,
+};
 pub use storage::{ChallengeRecord, ChallengeStore, IssuanceStore, MemoryStore, VerifiedIssuance};

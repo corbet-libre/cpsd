@@ -1,0 +1,14 @@
+schema = 1
+checks = ["acceptance"]
+
+[[graphs]]
+id = "root"
+kind = "cargo"
+manifest = "Cargo.toml"
+lock = "Cargo.lock"
+
+[[graphs]]
+id = "fuzz"
+kind = "cargo"
+manifest = "fuzz/Cargo.toml"
+lock = "fuzz/Cargo.lock"

@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 
 const allowed = new Set([
+  "(MIT OR Apache-2.0) AND NCSA",
   "(MIT OR Apache-2.0) AND Unicode-3.0",
   "0BSD",
   "0BSD OR MIT OR Apache-2.0",
@@ -40,7 +41,7 @@ const allowed = new Set([
   "Zlib",
   "Zlib OR Apache-2.0 OR MIT"
 ]);
-const metadata = JSON.parse(readFileSync('dependency-metadata.json', 'utf8'));
+const metadata = JSON.parse(readFileSync(process.env.DEPENDENCY_METADATA || 'dependency-metadata.json', 'utf8'));
 const rejected = metadata.packages.filter(p => !allowed.has(p.license));
 for (const p of rejected) {
   console.error(`Unreviewed license: ${p.name} ${p.version}: ${p.license ?? 'missing'}`);
