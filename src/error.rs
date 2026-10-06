@@ -114,3 +114,12 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// Discard backend details while preserving the boundary's selected error.
+pub(crate) fn redact<E>(error: Error) -> impl FnOnce(E) -> Error {
+    move |_| error
+}
+
+pub(crate) fn ensure(valid: bool, error: Error) -> Result<(), Error> {
+    if valid { Ok(()) } else { Err(error) }
+}

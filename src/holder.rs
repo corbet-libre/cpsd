@@ -97,7 +97,7 @@ pub fn request_issue<R: RngCore + CryptoRng>(
     let commitment = issuer
         .signature_params()
         .commit_to_messages([(IDX_SECRET, &secret.0)], &blinding)
-        .map_err(|_| Error::ProofGeneration)?;
+        .map_err(crate::error::redact(Error::ProofGeneration))?;
     let issuer_tag = scalar_mul(params::issuer_tag_base(), &secret.0);
     if commitment.is_zero() || issuer_tag.is_zero() {
         return Err(Error::ProofGeneration);
@@ -114,7 +114,7 @@ pub fn request_issue<R: RngCore + CryptoRng>(
         Some(challenge.to_bytes().to_vec()),
         ProverConfig::default(),
     )
-    .map_err(|_| Error::ProofGeneration)?;
+    .map_err(crate::error::redact(Error::ProofGeneration))?;
 
     let request = IssuanceRequest {
         key_id: issuer.key_id().clone(),

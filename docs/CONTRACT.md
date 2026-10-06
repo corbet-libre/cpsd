@@ -20,7 +20,7 @@ The passport signs a blinded holder secret, key ID, epoch, expiry, hidden
 revocation handle and a fixed gate catalogue's expiries. Missing gates sign
 zero. Timestamps must be in `1..2^40`, validity is inclusive, and at most 64
 gates are supported. Gate results here are only authorized global proof
-presence/expiry; provider checks and uniqueness belong to `cglb`.
+presence/expiry; provider checks and uniqueness belong to `cgbl`.
 
 A presentation proves signature possession, equality of the signed secret
 with the community pseudonym's exponent, current epoch, passport validity and
@@ -77,7 +77,7 @@ nonce/binding, registers the first issuer tag or requires the existing one,
 and consumes the nonce. Any mismatch rolls back; no signed answer is released
 before commit. Two competing first secrets cannot both win, even with distinct
 sessions/challenges. Same-secret renewal survives key rotation. Session
-validation, stable person assignment, gates and suspension belong to cglb.
+validation, stable person assignment, gates and suspension belong to cgbl.
 
 `ChallengeStore` defines scoped reserve, cheap lookup, compare-and-delete and expiry pruning.
 `MemoryStore` and the native `storage::libsql::LibsqlStore` implement it. Native
@@ -94,7 +94,7 @@ Only cpsd can construct the proof-validated tag-registration input. Tags persist
 through nonce pruning/restart/key rotation and cannot be overwritten by renewal.
 Database integrity, rollback prevention and authoritative restoration are service
 responsibilities; lost global continuity state must stop issuance. Outstanding random nonces, request digests and
-deadlines are deleted on consumption or expiry pruning. `cglb` has a separate
+deadlines are deleted on consumption or expiry pruning. `cgbl` has a separate
 global DB; community verifiers each receive their own community DB.
 
 Tests must include real cryptographic round trips, hostile holder attempts,
@@ -138,7 +138,7 @@ proper independent holder. Bindings survive expiry and pruning forever.
 Global SQL deployments append `ISSUANCE_UNIQUENESS_SCHEMA` after
 `ISSUANCE_SCHEMA`. This new unique index fails closed on historical duplicates;
 it never silently frees a holder binding. Community presentation stores require
-only the original challenge schema. cglb delegates these invariants to cpsd.
+only the original challenge schema. cgbl delegates these invariants to cpsd.
 
 ## Opaque holder port
 

@@ -35,16 +35,17 @@ impl Reader<'_> {
             check_shape(raw, presentation, index)?;
             let mut field = raw;
             let statement = StatementProof::<Curve>::deserialize_compressed(&mut field)
-                .map_err(|_| Error::Decode("proof"))?;
+                .map_err(crate::error::redact(Error::Decode("proof")))?;
             // Also reject duplicate or out-of-order map entries, which ark's
             // generic BTreeMap decoder otherwise normalizes silently.
             let mut canonical = Vec::new();
             statement
                 .serialize_compressed(&mut canonical)
-                .map_err(|_| Error::Decode("proof"))?;
-            if !field.is_empty() || canonical != raw {
-                return Err(Error::Decode("noncanonical proof"));
-            }
+                .map_err(crate::error::redact(Error::Decode("proof")))?;
+            crate::error::ensure(
+                crate::wire::canonical_encoding(field, &canonical, raw),
+                Error::Decode("noncanonical proof"),
+            )?;
             statements.push(statement);
         }
         Ok(Proof {
@@ -66,8 +67,9 @@ pub(crate) fn well_formed(proof: &Proof<Curve>, count: usize, presentation: bool
             .enumerate()
             .all(|(i, statement)| {
                 let mut raw = Vec::new();
-                statement.serialize_compressed(&mut raw).is_ok()
-                    && check_shape(&raw, presentation, i).is_ok()
+                statement
+                    .serialize_compressed(&mut raw)
+                    .is_ok_and(|()| check_shape(&raw, presentation, i).is_ok())
             })
 }
 
@@ -134,12 +136,12 @@ impl Shape<'_> {
     fn length(&mut self) -> Result<usize, Error> {
         let bytes: [u8; 8] = self
             .0
-            .get(..8)
-            .ok_or(Error::Decode("proof shape"))?
-            .try_into()
-            .map_err(|_| Error::Decode("proof shape"))?;
+            .first_chunk::<8>()
+            .copied()
+            .ok_or(Error::Decode("proof shape"))?;
         self.skip(8)?;
-        usize::try_from(u64::from_le_bytes(bytes)).map_err(|_| Error::Decode("proof shape"))
+        usize::try_from(u64::from_le_bytes(bytes))
+            .map_err(crate::error::redact(Error::Decode("proof shape")))
     }
     fn vector(&mut self, count: usize, size: usize) -> Result<(), Error> {
         self.integer(count as u64)?;

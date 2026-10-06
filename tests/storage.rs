@@ -789,3 +789,16 @@ async fn community_verifier_database_requires_no_global_person_registry() {
     store.check_indexes().await.unwrap();
     assert_eq!(store.check_issuance_indexes().await, Err(Error::Storage));
 }
+
+#[tokio::test]
+async fn index_verification_fails_closed_without_migrations() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Db::open(Config::new(
+        format!("file://{}", directory.path().join("bare.db").display()),
+        "",
+    ))
+    .await
+    .unwrap();
+    let store = LibsqlStore::new(&db, scope("bare"), 10).unwrap();
+    assert_eq!(store.check_indexes().await, Err(Error::Storage));
+}

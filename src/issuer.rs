@@ -52,13 +52,9 @@ impl IssuerPublicKey {
         public_key: PublicKeyG2<Curve>,
     ) -> Result<Self, Error> {
         check_catalogue(&gates)?;
-        if !public_key.is_valid() {
-            return Err(Error::InvalidKey);
-        }
+        crate::error::ensure(public_key.is_valid(), Error::InvalidKey)?;
         let params = params::signature_params(&key_id, &gates);
-        if !params.is_valid() {
-            return Err(Error::InvalidKey);
-        }
+        crate::error::ensure(params.is_valid(), Error::InvalidKey)?;
         Ok(Self {
             key_id,
             gates,
@@ -164,7 +160,7 @@ fn decode_catalogue(r: &mut Reader<'_>) -> Result<Vec<GateId>, Error> {
     (0..count).map(|_| r.gate()).collect()
 }
 
-/// Issuer key pair (the global level, `cglb`).
+/// Issuer key pair (the global level, `cgbl`).
 ///
 /// The secret key has no getter. [`to_secret_bytes`](Self::to_secret_bytes)
 /// exists only to move the key into the platform secret store; the key is
@@ -266,7 +262,7 @@ impl IssuerKey {
             &self.secret,
             &self.public.params,
         )
-        .map_err(|_| Error::InvalidIssuanceRequest)?;
+        .map_err(crate::error::redact(Error::InvalidIssuanceRequest))?;
 
         Ok(BlindPassport {
             key_id: self.public.key_id.clone(),
@@ -416,7 +412,7 @@ impl IssuanceRequest {
                 Some(challenge.0.to_vec()),
                 VerifierConfig::default(),
             )
-            .map_err(|_| Error::InvalidIssuanceRequest)
+            .map_err(crate::error::redact(Error::InvalidIssuanceRequest))
     }
 }
 

@@ -157,24 +157,28 @@ impl<'a> Reader<'a> {
     ) -> Result<T, Error> {
         let raw = self.bytes()?;
         let mut field = raw;
-        let value = T::deserialize_compressed(&mut field).map_err(|_| Error::Decode(what))?;
+        let value = T::deserialize_compressed(&mut field)
+            .map_err(crate::error::redact(Error::Decode(what)))?;
         let mut canonical = Zeroizing::new(Vec::with_capacity(raw.len()));
         value
             .serialize_compressed(&mut *canonical)
-            .map_err(|_| Error::Decode(what))?;
-        if !field.is_empty() || canonical.as_slice() != raw {
-            return Err(Error::Decode(what));
-        }
+            .map_err(crate::error::redact(Error::Decode(what)))?;
+        crate::error::ensure(
+            canonical_encoding(field, &canonical, raw),
+            Error::Decode(what),
+        )?;
         Ok(value)
     }
 
     pub(crate) fn key_id(&mut self) -> Result<KeyId, Error> {
-        let raw = core::str::from_utf8(self.bytes()?).map_err(|_| Error::Decode("key id"))?;
+        let raw = core::str::from_utf8(self.bytes()?)
+            .map_err(crate::error::redact(Error::Decode("key id")))?;
         KeyId::new(raw)
     }
 
     pub(crate) fn gate(&mut self) -> Result<GateId, Error> {
-        let raw = core::str::from_utf8(self.bytes()?).map_err(|_| Error::Decode("gate id"))?;
+        let raw = core::str::from_utf8(self.bytes()?)
+            .map_err(crate::error::redact(Error::Decode("gate id")))?;
         GateId::new(raw)
     }
 
@@ -185,6 +189,10 @@ impl<'a> Reader<'a> {
             Err(Error::Decode("trailing bytes"))
         }
     }
+}
+
+pub(crate) fn canonical_encoding(remaining: &[u8], canonical: &[u8], raw: &[u8]) -> bool {
+    remaining.is_empty() && canonical == raw
 }
 
 /// Lower-case hexadecimal.

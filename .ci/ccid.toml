@@ -1,0 +1,22 @@
+schema = 1
+project = "cpsd"
+
+[checks.verify]
+kind = "commands"
+commands = [["bash", ".ci/verify.sh"]]
+cache_tools = [["rustc", "-vV"], ["cargo", "--version"], ["node", "--version"], ["python3", "--version"], ["curl", "--version"], ["chromedriver", "--version"], ["chromium", "--version"], ["cargo", "fuzz", "--version"], ["rustup", "run", "nightly", "rustc", "-vV"], ["rustup", "run", "nightly", "cargo", "llvm-cov", "--version"], ["pkg-config", "--version"], ["clang", "--version"]]
+cache_env = ["LIBCLANG_PATH", "PKG_CONFIG_PATH", "NIX_CFLAGS_COMPILE", "NIX_LDFLAGS", "LD_LIBRARY_PATH"]
+cache_outputs = ["coverage.json", "coverage.lcov", "coverage.txt", "dependency-metadata.json"]
+
+[checks.advisories]
+kind = "commands"
+commands = [["cargo", "deny", "--locked", "check", "advisories", "licenses"], ["cargo", "deny", "--manifest-path", "fuzz/Cargo.toml", "--locked", "check", "advisories", "licenses"]]
+
+[render]
+tool_revision = "77a5ac18542750de020ebf753d22c3200530282b"
+
+[jobs.verify]
+scheduler = "crow"
+checks = ["verify", "advisories"]
+workflow = "repository-jobs"
+command = ["bash", ".ci/run-cached.sh"]

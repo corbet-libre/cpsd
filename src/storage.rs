@@ -119,7 +119,10 @@ impl ChallengeStore for MemoryStore {
     }
     async fn reserve(&self, record: ChallengeRecord) -> Result<bool, Error> {
         check_timestamp(record.expires)?;
-        let mut state = self.state.lock().map_err(|_| Error::Storage)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(crate::error::redact(Error::Storage))?;
         let records = &mut state.records;
         if records.contains_key(&record.nonce) {
             return Ok(false);
@@ -137,7 +140,10 @@ impl ChallengeStore for MemoryStore {
         now: Timestamp,
     ) -> Result<bool, Error> {
         check_timestamp(now)?;
-        let state = self.state.lock().map_err(|_| Error::Storage)?;
+        let state = self
+            .state
+            .lock()
+            .map_err(crate::error::redact(Error::Storage))?;
         Ok(state
             .records
             .get(&nonce)
@@ -150,7 +156,10 @@ impl ChallengeStore for MemoryStore {
         now: Timestamp,
     ) -> Result<bool, Error> {
         check_timestamp(now)?;
-        let mut state = self.state.lock().map_err(|_| Error::Storage)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(crate::error::redact(Error::Storage))?;
         let records = &mut state.records;
         if records
             .get(&nonce)
@@ -164,7 +173,10 @@ impl ChallengeStore for MemoryStore {
     }
     async fn prune(&self, now: Timestamp) -> Result<u64, Error> {
         check_timestamp(now)?;
-        let mut state = self.state.lock().map_err(|_| Error::Storage)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(crate::error::redact(Error::Storage))?;
         let records = &mut state.records;
         let before = records.len();
         records.retain(|_, record| record.expires >= now);
@@ -176,7 +188,10 @@ impl IssuanceStore for MemoryStore {
     async fn consume_issuance(&self, issuance: VerifiedIssuance) -> Result<bool, Error> {
         let (nonce, binding, now, person, tag) = issuance.fields();
         check_timestamp(now)?;
-        let mut state = self.state.lock().map_err(|_| Error::Storage)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(crate::error::redact(Error::Storage))?;
         if !state
             .records
             .get(&nonce)
@@ -256,14 +271,14 @@ pub mod libsql {
 
     impl LibsqlStore {
         /// Bind a database to the exact community bytes using reversible hex.
-        /// Deploy one physical database per community; `cglb` uses its own DB.
+        /// Deploy one physical database per community; `cgbl` uses its own DB.
         pub fn new(db: &Db, community: CommunityId, capacity: usize) -> Result<Self, Error> {
             if capacity == 0 {
                 return Err(Error::StorageCapacity);
             }
             let scoped = db
                 .community(format!("cpsd/{}", crate::wire::hex(community.as_bytes())))
-                .map_err(|_| Error::Storage)?;
+                .map_err(crate::error::redact(Error::Storage))?;
             Ok(Self {
                 community,
                 db: scoped,
@@ -293,7 +308,7 @@ pub mod libsql {
                     .explain(sql, args)
                     .await
                     .and_then(|plan| plan.assert_indexed())
-                    .map_err(|_| Error::Storage)?;
+                    .map_err(crate::error::redact(Error::Storage))?;
             }
             Ok(())
         }
@@ -311,7 +326,7 @@ pub mod libsql {
                     .explain(sql, args)
                     .await
                     .and_then(|plan| plan.assert_indexed())
-                    .map_err(|_| Error::Storage)?;
+                    .map_err(crate::error::redact(Error::Storage))?;
             }
             Ok(())
         }
@@ -335,7 +350,7 @@ pub mod libsql {
                 }
                 let rows = tx.query(COUNT, ()).await?;
                 let count = rows[0].get_i64(0)?;
-                if count < 0 || count as u64 >= self.capacity as u64 {
+                if !u64::try_from(count).is_ok_and(|count| count < self.capacity as u64) {
                     tx.rollback().await?;
                     return Err(crlt::Error::RowLimit);
                 }
@@ -371,7 +386,7 @@ pub mod libsql {
                 .query(MATCH, params![nonce.to_vec(), binding.to_vec(), now as i64])
                 .await
                 .map(|rows| !rows.is_empty())
-                .map_err(|_| Error::Storage)
+                .map_err(crate::error::redact(Error::Storage))
         }
         async fn consume(
             &self,
@@ -387,36 +402,41 @@ pub mod libsql {
                 )
                 .await
                 .map(|count| count == 1)
-                .map_err(|_| Error::Storage)
+                .map_err(crate::error::redact(Error::Storage))
         }
         async fn prune(&self, now: Timestamp) -> Result<u64, Error> {
             check_timestamp(now)?;
             self.db
                 .execute(PRUNE, params![now as i64])
                 .await
-                .map_err(|_| Error::Storage)
+                .map_err(crate::error::redact(Error::Storage))
         }
     }
     impl IssuanceStore for LibsqlStore {
         async fn consume_issuance(&self, issuance: VerifiedIssuance) -> Result<bool, Error> {
             let (nonce, binding, now, person, tag) = issuance.fields();
             check_timestamp(now)?;
-            let mut tx = self.db.tx().await.map_err(|_| Error::Storage)?;
+            let mut tx = self
+                .db
+                .tx()
+                .await
+                .map_err(crate::error::redact(Error::Storage))?;
             if tx
                 .query(MATCH, params![nonce.to_vec(), binding.to_vec(), now as i64])
                 .await
-                .map_err(|_| Error::Storage)?
+                .map_err(crate::error::redact(Error::Storage))?
                 .is_empty()
             {
-                tx.rollback().await.map_err(|_| Error::Storage)?;
-                return Ok(false);
+                return finish_issuance_transaction(tx, 0).await;
             }
             let owners = tx
                 .query(TAG_OWNER, params![tag.to_bytes().to_vec()])
                 .await
-                .map_err(|_| Error::Storage)?;
+                .map_err(crate::error::redact(Error::Storage))?;
             if let Some(owner) = owners.first()
-                && owner.get_value(0).map_err(|_| Error::Storage)?
+                && owner
+                    .get_value(0)
+                    .map_err(crate::error::redact(Error::Storage))?
                     != &crlt::Value::Blob(person.to_vec())
             {
                 return Err(Error::IssuerTagClaimed);
@@ -424,12 +444,16 @@ pub mod libsql {
             let rows = tx
                 .query(TAG, params![person.to_vec()])
                 .await
-                .map_err(|_| Error::Storage)?;
+                .map_err(crate::error::redact(Error::Storage))?;
             if let Some(row) = rows.first() {
-                if row.get_value(0).map_err(|_| Error::Storage)?
+                if row
+                    .get_value(0)
+                    .map_err(crate::error::redact(Error::Storage))?
                     != &crlt::Value::Blob(tag.to_bytes().to_vec())
                 {
-                    tx.rollback().await.map_err(|_| Error::Storage)?;
+                    tx.rollback()
+                        .await
+                        .map_err(crate::error::redact(Error::Storage))?;
                     return Err(Error::IssuerTagMismatch);
                 }
             } else {
@@ -438,7 +462,7 @@ pub mod libsql {
                     params![person.to_vec(), tag.to_bytes().to_vec()],
                 )
                 .await
-                .map_err(|_| Error::Storage)?;
+                .map_err(crate::error::redact(Error::Storage))?;
             }
             let consumed = tx
                 .execute(
@@ -446,13 +470,24 @@ pub mod libsql {
                     params![nonce.to_vec(), binding.to_vec(), now as i64],
                 )
                 .await
-                .map_err(|_| Error::Storage)?;
-            if consumed != 1 {
-                tx.rollback().await.map_err(|_| Error::Storage)?;
-                return Ok(false);
-            }
-            tx.commit().await.map_err(|_| Error::Storage)?;
-            Ok(true)
+                .map_err(crate::error::redact(Error::Storage))?;
+            finish_issuance_transaction(tx, consumed).await
         }
+    }
+
+    pub(crate) async fn finish_issuance_transaction(
+        tx: crlt::Transaction,
+        consumed: u64,
+    ) -> Result<bool, Error> {
+        if consumed != 1 {
+            tx.rollback()
+                .await
+                .map_err(crate::error::redact(Error::Storage))?;
+            return Ok(false);
+        }
+        tx.commit()
+            .await
+            .map_err(crate::error::redact(Error::Storage))?;
+        Ok(true)
     }
 }

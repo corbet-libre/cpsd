@@ -2,6 +2,8 @@ use crate::test_support::TestPresentation;
 use std::{collections::BTreeSet, time::Instant};
 
 use crate::*;
+use ark_ec::AffineRepr;
+use ark_ff::Zero;
 use rand::{SeedableRng, rngs::StdRng};
 
 fn rng() -> StdRng {
@@ -893,4 +895,991 @@ fn write_fuzz_corpus() {
     let signature_offset = malformed.len() - 112;
     malformed[signature_offset..signature_offset + 48].copy_from_slice(&infinity);
     std::fs::write(dir.join("noncanonical-infinity"), malformed).unwrap();
+}
+
+// --- Coverage batch: exact diagnostics, wire boundaries, session contracts.
+
+#[test]
+fn error_display_reports_exact_diagnostics() {
+    let gate = GateId::new("phone").unwrap();
+    let cases = [
+        (Error::InvalidIdentifier("key id"), "invalid key id"),
+        (Error::InvalidTimestamp, "timestamp out of range"),
+        (Error::InvalidGateCatalogue, "invalid gate catalogue"),
+        (Error::TooManyGates, "too many gates"),
+        (
+            Error::UnknownGate(gate.clone()),
+            "gate phone is not in the issuer's catalogue",
+        ),
+        (
+            Error::KeyMismatch,
+            "object belongs to a different issuer key",
+        ),
+        (Error::UnknownKey, "unknown issuer key"),
+        (Error::DuplicateKeyId, "duplicate key ID in key ring"),
+        (Error::InvalidKey, "invalid key"),
+        (Error::InvalidIssuanceRequest, "invalid issuance request"),
+        (Error::IssuancePending, "issuance already pending"),
+        (Error::NoPendingIssuance, "no pending issuance"),
+        (Error::PassportUnavailable, "passport unavailable"),
+        (Error::InvalidSignature, "invalid passport signature"),
+        (Error::PassportExpired, "passport expired"),
+        (Error::WrongEpoch, "wrong policy epoch"),
+        (Error::WrongExpiryCohort, "wrong expiry cohort"),
+        (
+            Error::GateMissing(gate.clone()),
+            "gate phone missing from passport",
+        ),
+        (Error::GateExpired(gate.clone()), "gate phone expired"),
+        (Error::InvalidProof, "invalid proof"),
+        (Error::ProofGeneration, "proof generation failed"),
+        (Error::Storage, "challenge storage failed"),
+        (
+            Error::StorageCapacity,
+            "challenge storage capacity exceeded",
+        ),
+        (Error::ChallengeConflict, "challenge collision"),
+        (Error::InvalidChallenge, "invalid or consumed challenge"),
+        (
+            Error::InvalidPresentationRequest,
+            "unauthenticated presentation request",
+        ),
+        (Error::IssuerTagMismatch, "issuer tag continuity failed"),
+        (Error::IssuerTagClaimed, "issuer tag already claimed"),
+        (Error::Decode("gate order"), "cannot decode gate order"),
+    ];
+    assert_eq!(cases.len(), 29);
+    for (error, diagnostic) in cases {
+        assert_eq!(error.to_string(), diagnostic);
+    }
+}
+
+#[test]
+fn debug_formats_redact_secrets_and_name_public_parts() {
+    let mut rng = rng();
+    let (key, passport, request) = fixture(&mut rng);
+    let issuance_challenge = IssuanceChallenge::generate(&mut rng);
+    let (issuance_request, pending) = request_issue(
+        &mut rng,
+        passport.secret(),
+        key.public_key(),
+        &issuance_challenge,
+    )
+    .unwrap();
+    let proof = passport.present_trusted(&mut rng, &request).unwrap();
+    assert_eq!(
+        format!("{:?}", passport.secret()),
+        "HolderSecret(<redacted>)"
+    );
+    let pending_debug = format!("{pending:?}");
+    assert!(pending_debug.contains("PendingIssuance"));
+    assert!(pending_debug.contains("key-1"));
+    let passport_debug = format!("{passport:?}");
+    assert!(passport_debug.contains("Passport"));
+    assert!(passport_debug.contains("key-1"));
+    let public_debug = format!("{:?}", key.public_key());
+    assert!(public_debug.contains("IssuerPublicKey"));
+    assert!(public_debug.contains("key-1"));
+    let key_debug = format!("{key:?}");
+    assert!(key_debug.contains("IssuerKey"));
+    assert!(key_debug.contains("key-1"));
+    let tag = passport.secret().issuer_tag();
+    assert_eq!(
+        format!("{tag:?}"),
+        format!("IssuerTag({})", crate::wire::hex(&tag.to_bytes()))
+    );
+    let challenge = IssuanceChallenge::generate(&mut rng);
+    assert_eq!(
+        format!("{challenge:?}"),
+        format!(
+            "IssuanceChallenge({})",
+            crate::wire::hex(&challenge.to_bytes())
+        )
+    );
+    let request_debug = format!("{request:?}");
+    assert!(request_debug.contains("PresentationRequest"));
+    assert!(request_debug.contains("community-a"));
+    let offering = key
+        .issue_blind(
+            &mut rng,
+            &IssuanceRequest::from_bytes(&issuance_request.to_bytes()).unwrap(),
+            &issuance_challenge,
+            &attrs(),
+        )
+        .unwrap();
+    let offering_debug = format!("{offering:?}");
+    assert!(offering_debug.contains("BlindPassport"));
+    assert!(offering_debug.contains("key-1"));
+    let presentation_debug = format!("{proof:?}");
+    assert!(presentation_debug.contains("Presentation"));
+    assert!(presentation_debug.contains("key-1"));
+    let record = ChallengeRecord {
+        nonce: [1; 32],
+        binding: [2; 32],
+        expires: 10,
+    };
+    assert_eq!(format!("{record:?}"), "ChallengeRecord(<redacted>)");
+    let auth = AuthenticatedIssuance::new([1; 32], [2; 32]);
+    assert_eq!(format!("{auth:?}"), "AuthenticatedIssuance(<redacted>)");
+    let nym = passport.pseudonym(&community());
+    assert_eq!(format!("{nym:?}"), format!("Pseudonym({})", nym.to_hex()));
+}
+
+#[test]
+fn public_accessors_report_committed_state() {
+    let mut rng = rng();
+    let (key, passport, request) = fixture(&mut rng);
+    let challenge = IssuanceChallenge::generate(&mut rng);
+    let (issuance_request, _) =
+        request_issue(&mut rng, passport.secret(), key.public_key(), &challenge).unwrap();
+    assert_eq!(passport.key_id(), key.public_key().key_id());
+    assert_eq!(passport.attributes(), &attrs());
+    assert_eq!(passport.issuer(), key.public_key());
+    assert_eq!(
+        passport.secret().to_bytes().as_slice(),
+        HolderSecret::from_bytes(passport.secret().to_bytes().as_slice())
+            .unwrap()
+            .to_bytes()
+            .as_slice()
+    );
+    assert_eq!(
+        passport.secret().issuer_tag(),
+        issuance_request.issuer_tag()
+    );
+    assert_eq!(request.community(), &community());
+    assert_eq!(request.policy_epoch(), 7);
+    assert_eq!(request.now(), 1000);
+    assert_eq!(request.epoch_expiry(), None);
+    assert!(request.required_gates().contains(&gate()));
+    assert_eq!(request.challenge().len(), 32);
+    let proof = passport.present_trusted(&mut rng, &request).unwrap();
+    assert_eq!(proof.key_id(), key.public_key().key_id());
+    assert_eq!(proof.pseudonym(), &passport.pseudonym(&community()));
+    assert_eq!(proof.pseudonym().to_hex().len(), 96);
+    let handle = BlindPassport::from_bytes(
+        &key.issue_blind(
+            &mut rng,
+            &IssuanceRequest::from_bytes(&issuance_request.to_bytes()).unwrap(),
+            &challenge,
+            &attrs(),
+        )
+        .unwrap()
+        .to_bytes(),
+    )
+    .unwrap();
+    assert_eq!(handle.key_id(), key.public_key().key_id());
+    assert_eq!(handle.attributes(), &attrs());
+    assert_eq!(handle.revocation_handle().len(), 32);
+}
+
+#[test]
+fn attributes_reject_oversized_catalogues_and_unordered_wire_gates() {
+    use crate::wire::{Kind, Reader, Writer};
+    let too_many: Vec<_> = (0..=MAX_GATES)
+        .map(|i| GateId::new(format!("g{i}")).unwrap())
+        .collect();
+    let mut oversized = PassportAttributes::new(2000, 7);
+    for gate in &too_many {
+        oversized = oversized.with_gate(gate.clone(), 1500);
+    }
+    assert_eq!(oversized.validate(&too_many), Err(Error::TooManyGates));
+    for gates in [
+        vec![GateId::new("b").unwrap(), GateId::new("a").unwrap()],
+        vec![GateId::new("a").unwrap(), GateId::new("a").unwrap()],
+    ] {
+        let mut w = Writer::new(Kind::Passport);
+        w.u64(7);
+        w.u64(2000);
+        w.u16(gates.len() as u16);
+        for gate in &gates {
+            w.gate(gate);
+            w.u64(1500);
+        }
+        let bytes = w.finish_public();
+        let mut r = Reader::new(&bytes, Kind::Passport).unwrap();
+        assert_eq!(
+            PassportAttributes::decode(&mut r),
+            Err(Error::Decode("gate order"))
+        );
+    }
+}
+
+#[test]
+fn presentation_request_rejects_unordered_wire_gates() {
+    use crate::wire::{Kind, Writer};
+    let mut w = Writer::new(Kind::PresentationRequest);
+    w.bytes(community().as_bytes());
+    w.u64(7);
+    w.u64(1000);
+    w.u64(0);
+    w.u16(2);
+    w.gate(&GateId::new("b").unwrap());
+    w.gate(&GateId::new("a").unwrap());
+    w.fixed(&[7u8; 32]);
+    let bytes = w.finish_public();
+    assert_eq!(
+        PresentationRequest::from_bytes(&bytes),
+        Err(Error::Decode("gate order"))
+    );
+}
+
+#[test]
+fn pseudonym_boundary_rejects_trailing_identity_and_noncanonical_encodings() {
+    use ark_bls12_381::G1Affine;
+    use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+    let mut rng = rng();
+    let secret = HolderSecret::generate(&mut rng);
+    let valid = secret.pseudonym(&community()).to_bytes().to_vec();
+    let mut trailing = valid.clone();
+    trailing.push(0);
+    assert_eq!(
+        Pseudonym::from_bytes(&trailing),
+        Err(Error::Decode("pseudonym"))
+    );
+    let mut identity = Vec::new();
+    G1Affine::zero()
+        .serialize_compressed(&mut identity)
+        .unwrap();
+    assert_eq!(identity.len(), 48);
+    assert!(
+        G1Affine::deserialize_compressed(identity.as_slice())
+            .unwrap()
+            .is_zero()
+    );
+    assert_eq!(
+        Pseudonym::from_bytes(&identity),
+        Err(Error::Decode("pseudonym"))
+    );
+    let mut ambiguous = valid.clone();
+    ambiguous[0] |= 0x40;
+    assert_eq!(
+        Pseudonym::from_bytes(&ambiguous),
+        Err(Error::Decode("pseudonym"))
+    );
+}
+
+#[test]
+fn issuance_request_rejects_identity_commitment_and_tag() {
+    use ark_bls12_381::G1Affine;
+    use ark_serialize::CanonicalSerialize;
+    let mut rng = rng();
+    let key = key(&mut rng, "identity");
+    let secret = HolderSecret::generate(&mut rng);
+    let challenge = IssuanceChallenge::generate(&mut rng);
+    let (request, _) = request_issue(&mut rng, &secret, key.public_key(), &challenge).unwrap();
+    let encoded = request.to_bytes();
+    let mut point = Vec::new();
+    G1Affine::zero().serialize_compressed(&mut point).unwrap();
+    assert_eq!(point.len(), 48);
+    // Layout: magic + version + kind, key id, then the 48-byte commitment.
+    let key_len = u32::from_be_bytes(encoded[6..10].try_into().unwrap()) as usize;
+    let commitment = 10 + key_len;
+    for offset in [commitment, commitment + 4 + 48] {
+        let mut changed = encoded.clone();
+        changed[offset + 4..offset + 4 + 48].copy_from_slice(&point);
+        assert_eq!(
+            IssuanceRequest::from_bytes(&changed).err(),
+            Some(Error::Decode("identity element"))
+        );
+    }
+}
+
+#[test]
+fn zero_scalars_are_rejected_at_every_boundary() {
+    let mut rng = rng();
+    let (key, passport, _) = fixture(&mut rng);
+    let challenge = IssuanceChallenge::generate(&mut rng);
+    let (_, pending) =
+        request_issue(&mut rng, passport.secret(), key.public_key(), &challenge).unwrap();
+    let mut pending_bytes = pending.to_bytes().to_vec();
+    pending_bytes[10..42].fill(0);
+    assert_eq!(
+        PendingIssuance::from_bytes(&pending_bytes).err(),
+        Some(Error::InvalidKey)
+    );
+    let mut passport_bytes = passport.to_bytes().to_vec();
+    passport_bytes[10..42].fill(0);
+    assert_eq!(
+        Passport::from_bytes(&passport_bytes).err(),
+        Some(Error::InvalidKey)
+    );
+    let mut secret_bytes = key.to_secret_bytes().to_vec();
+    let key_len = u32::from_be_bytes(secret_bytes[6..10].try_into().unwrap()) as usize;
+    let mut offset = 10 + key_len;
+    let gates = u16::from_be_bytes(secret_bytes[offset..offset + 2].try_into().unwrap()) as usize;
+    offset += 2;
+    for _ in 0..gates {
+        let len = u32::from_be_bytes(secret_bytes[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4 + len;
+    }
+    assert_eq!(&secret_bytes[offset..offset + 4], &32u32.to_be_bytes());
+    assert_eq!(offset + 4 + 32, secret_bytes.len());
+    secret_bytes[offset + 4..offset + 4 + 32].fill(0);
+    assert_eq!(
+        IssuerKey::from_secret_bytes(&secret_bytes).err(),
+        Some(Error::InvalidKey)
+    );
+}
+
+#[test]
+fn tampered_issuer_key_with_identity_point_is_invalid() {
+    use ark_bls12_381::G2Affine;
+    use ark_serialize::CanonicalSerialize;
+    let mut rng = rng();
+    let key = key(&mut rng, "identity-key");
+    let encoded = key.public_key().to_bytes();
+    let mut point = Vec::new();
+    G2Affine::zero().serialize_compressed(&mut point).unwrap();
+    assert_eq!(point.len(), 96);
+    let key_len = u32::from_be_bytes(encoded[6..10].try_into().unwrap()) as usize;
+    let mut offset = 10 + key_len;
+    let gates = u16::from_be_bytes(encoded[offset..offset + 2].try_into().unwrap()) as usize;
+    offset += 2;
+    for _ in 0..gates {
+        let len = u32::from_be_bytes(encoded[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4 + len;
+    }
+    assert_eq!(&encoded[offset..offset + 4], &96u32.to_be_bytes());
+    assert_eq!(offset + 4 + 96, encoded.len());
+    let mut changed = encoded.clone();
+    changed[offset + 4..offset + 4 + 96].copy_from_slice(&point);
+    assert_eq!(
+        IssuerPublicKey::from_bytes(&changed),
+        Err(Error::InvalidKey)
+    );
+}
+
+#[test]
+fn issuance_with_identity_commitment_is_rejected_before_signing() {
+    use ark_bls12_381::G1Affine;
+    let mut rng = rng();
+    let key = key(&mut rng, "identity-check");
+    let secret = HolderSecret::generate(&mut rng);
+    let challenge = IssuanceChallenge::generate(&mut rng);
+    let (request, _) = request_issue(&mut rng, &secret, key.public_key(), &challenge).unwrap();
+    for forged in [
+        IssuanceRequest {
+            commitment: G1Affine::zero(),
+            ..request.clone()
+        },
+        IssuanceRequest {
+            issuer_tag: G1Affine::zero(),
+            ..request.clone()
+        },
+    ] {
+        assert_eq!(
+            key.issue_blind(&mut rng, &forged, &challenge, &attrs())
+                .err(),
+            Some(Error::InvalidIssuanceRequest)
+        );
+    }
+}
+
+#[test]
+fn issuer_key_equality_compares_all_components() {
+    let mut rng = rng();
+    let first = key(&mut rng, "same");
+    let second = key(&mut rng, "same");
+    assert_ne!(first.public_key(), second.public_key());
+    assert_ne!(key(&mut rng, "other").public_key(), first.public_key());
+    let other_catalogue =
+        IssuerKey::generate(&mut rng, KeyId::new("same").unwrap(), vec![gate()]).unwrap();
+    assert_ne!(first.public_key(), other_catalogue.public_key());
+}
+
+#[test]
+fn canonical_encoding_requires_full_consumption_and_byte_identity() {
+    assert!(crate::wire::canonical_encoding(
+        &[],
+        b"canonical",
+        b"canonical"
+    ));
+    assert!(!crate::wire::canonical_encoding(
+        b"trailing",
+        b"canonical",
+        b"canonical"
+    ));
+    assert!(!crate::wire::canonical_encoding(
+        &[],
+        b"canonical",
+        b"normalized"
+    ));
+    // Opaque backend errors must not be formatted or exposed by redaction.
+    struct PrivateBackend;
+    let result: std::result::Result<(), PrivateBackend> = Err(PrivateBackend);
+    assert_eq!(
+        result.map_err(crate::error::redact(Error::Storage)),
+        Err(Error::Storage)
+    );
+}
+
+#[test]
+fn issuance_accessors_roundtrip_and_debug_omits_proof_material() {
+    let mut rng = rng();
+    let key = key(&mut rng, "transport");
+    let secret = HolderSecret::generate(&mut rng);
+    let bytes = [0xa5; 32];
+    let from_bytes: fn([u8; 32]) -> IssuanceChallenge =
+        std::hint::black_box(IssuanceChallenge::from_bytes);
+    let challenge = from_bytes(bytes);
+    assert_eq!(challenge.to_bytes(), bytes);
+    let (request, _) = request_issue(&mut rng, &secret, key.public_key(), &challenge).unwrap();
+    let key_id: fn(&IssuanceRequest) -> &KeyId = std::hint::black_box(IssuanceRequest::key_id);
+    assert_eq!(key_id(&request), key.public_key().key_id());
+    let debug = format!("{request:?}");
+    assert!(debug.contains("transport"));
+    assert!(debug.contains("issuer_tag"));
+    assert!(!debug.contains("proof"));
+    assert!(!debug.contains("commitment"));
+}
+
+#[test]
+fn issuance_rejects_zero_secret_even_before_proof_construction() {
+    use ark_bls12_381::Fr;
+    use rand::{CryptoRng, RngCore};
+    struct ZeroRng;
+    impl RngCore for ZeroRng {
+        fn next_u32(&mut self) -> u32 {
+            0
+        }
+        fn next_u64(&mut self) -> u64 {
+            0
+        }
+        fn fill_bytes(&mut self, bytes: &mut [u8]) {
+            bytes.fill(0);
+        }
+        fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), rand::Error> {
+            self.fill_bytes(bytes);
+            Ok(())
+        }
+    }
+    impl CryptoRng for ZeroRng {}
+    let mut rng = rng();
+    let key = key(&mut rng, "zero-secret");
+    let secret = HolderSecret(Fr::zero());
+    let challenge = IssuanceChallenge::generate(&mut rng);
+    // Zero blinding makes the commitment identity; random blinding leaves
+    // a nonidentity commitment but the issuer tag remains identity.
+    assert_eq!(
+        request_issue(&mut ZeroRng, &secret, key.public_key(), &challenge).err(),
+        Some(Error::ProofGeneration)
+    );
+    assert_eq!(
+        request_issue(&mut rng, &secret, key.public_key(), &challenge).err(),
+        Some(Error::ProofGeneration)
+    );
+}
+
+#[tokio::test]
+async fn memory_consumption_entrypoint_enforces_binding_time_and_replay() {
+    let store = MemoryStore::new(community(), 4).unwrap();
+    assert!(
+        store
+            .reserve(ChallengeRecord {
+                nonce: [1; 32],
+                binding: [2; 32],
+                expires: 100
+            })
+            .await
+            .unwrap()
+    );
+    let consume = std::hint::black_box(<MemoryStore as ChallengeStore>::consume);
+    assert_eq!(
+        consume(&store, [1; 32], [2; 32], 0).await,
+        Err(Error::InvalidTimestamp)
+    );
+    assert!(!consume(&store, [1; 32], [3; 32], 100).await.unwrap());
+    assert!(!consume(&store, [1; 32], [2; 32], 101).await.unwrap());
+    assert!(consume(&store, [1; 32], [2; 32], 100).await.unwrap());
+    assert!(!consume(&store, [1; 32], [2; 32], 100).await.unwrap());
+}
+
+#[cfg(all(feature = "storage", not(target_arch = "wasm32")))]
+#[tokio::test]
+async fn libsql_rechecks_verified_issuance_and_rolls_back_inexact_consumption() {
+    use crate::storage::libsql::{
+        ISSUANCE_SCHEMA, ISSUANCE_UNIQUENESS_SCHEMA, LibsqlStore, SCHEMA,
+    };
+    use crlt::{Config, Db, Migration};
+    let directory = tempfile::tempdir().unwrap();
+    let db = Db::open(Config::new(
+        format!("file://{}", directory.path().join("ignored.db").display()),
+        "",
+    ))
+    .await
+    .unwrap();
+    let migrations = vec![
+        Migration::new(1, "challenges", SCHEMA),
+        Migration::new(2, "continuity", ISSUANCE_SCHEMA),
+        Migration::new(3, "uniqueness", ISSUANCE_UNIQUENESS_SCHEMA),
+    ];
+    db.migrate(&migrations).await.unwrap();
+    let store = LibsqlStore::new(&db, community(), 4).unwrap();
+    let store_community: fn(&LibsqlStore) -> &CommunityId =
+        std::hint::black_box(<LibsqlStore as ChallengeStore>::community);
+    assert_eq!(store_community(&store), &community());
+    let tag = HolderSecret::generate(&mut rng()).issuer_tag();
+    let verified = || VerifiedIssuance {
+        nonce: [1; 32],
+        binding: [2; 32],
+        now: 100,
+        person: [3; 32],
+        tag,
+    };
+    assert!(!store.consume_issuance(verified()).await.unwrap());
+    assert!(
+        store
+            .reserve(ChallengeRecord {
+                nonce: [1; 32],
+                binding: [2; 32],
+                expires: 100
+            })
+            .await
+            .unwrap()
+    );
+    let consume = std::hint::black_box(<LibsqlStore as ChallengeStore>::consume);
+    assert!(!consume(&store, [1; 32], [9; 32], 100).await.unwrap());
+    let scoped = db
+        .community(format!("cpsd/{}", crate::wire::hex(community().as_bytes())))
+        .unwrap();
+    for count in [0, 2] {
+        let mut tx = scoped.tx().await.unwrap();
+        tx.execute(
+            "INSERT INTO cpsd_issuer_tags (person, tag) VALUES (?1, ?2)",
+            crlt::params![vec![3u8; 32], tag.to_bytes().to_vec()],
+        )
+        .await
+        .unwrap();
+        assert!(
+            !crate::storage::libsql::finish_issuance_transaction(tx, count)
+                .await
+                .unwrap()
+        );
+        assert!(
+            scoped
+                .query(
+                    "SELECT tag FROM cpsd_issuer_tags WHERE person = ?1",
+                    crlt::params![vec![3u8; 32]]
+                )
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(store.matches([1; 32], [2; 32], 100).await.unwrap());
+    }
+    // A different tag must succeed: inexact consumption rolled back the
+    // first tag registration together with its transaction.
+    let other_tag = HolderSecret::generate(&mut StdRng::seed_from_u64(99)).issuer_tag();
+    let mut retry = verified();
+    retry.tag = other_tag;
+    assert!(store.consume_issuance(retry).await.unwrap());
+    assert!(!store.consume_issuance(verified()).await.unwrap());
+}
+
+#[test]
+fn rigged_rng_zero_is_rejected_by_nonzero_scalar() {
+    use rand::RngCore;
+    struct ZeroPrefixRng {
+        zero_calls: usize,
+        inner: StdRng,
+    }
+    impl RngCore for ZeroPrefixRng {
+        fn next_u32(&mut self) -> u32 {
+            if self.zero_calls > 0 {
+                self.zero_calls -= 1;
+                0
+            } else {
+                self.inner.next_u32()
+            }
+        }
+        fn next_u64(&mut self) -> u64 {
+            if self.zero_calls > 0 {
+                self.zero_calls -= 1;
+                0
+            } else {
+                self.inner.next_u64()
+            }
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            if self.zero_calls > 0 {
+                self.zero_calls -= 1;
+                dest.fill(0);
+            } else {
+                self.inner.fill_bytes(dest);
+            }
+        }
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
+            if self.zero_calls > 0 {
+                self.zero_calls -= 1;
+                dest.fill(0);
+                Ok(())
+            } else {
+                self.inner.try_fill_bytes(dest)
+            }
+        }
+    }
+    let mut rigged = ZeroPrefixRng {
+        zero_calls: 16,
+        inner: StdRng::seed_from_u64(7),
+    };
+    let scalar = crate::issuer::nonzero_scalar(&mut rigged);
+    assert!(!scalar.is_zero());
+}
+
+#[test]
+fn opaque_holder_attributes_track_verified_passport() {
+    let mut rng = rng();
+    let gate = gate();
+    let issuer = key(&mut rng, "opaque-attrs");
+    let mut holder = OpaqueHolder::from_seed(&mut [9; 32]);
+    assert_eq!(holder.attributes(), None);
+    let challenge = IssuanceChallenge::generate(&mut rng);
+    let request = holder
+        .begin_issuance(&mut rng, issuer.public_key(), &challenge)
+        .unwrap();
+    let attributes = PassportAttributes::new(2000, 7).with_gate(gate, 2000);
+    let blind = issuer
+        .issue_blind(&mut rng, &request, &challenge, &attributes)
+        .unwrap();
+    holder.finish_issuance(&blind).unwrap();
+    assert_eq!(holder.attributes(), Some(&attributes));
+}
+
+#[test]
+fn authentication_rejects_stale_but_signed_requests() {
+    use crate::test_support::{signed, signer};
+    let mut rng = rng();
+    let (_, _, request) = fixture(&mut rng);
+    let mut authority = signer(42);
+    let expected = AuthenticatedCommunity::from_authenticated_origin(
+        community(),
+        authority.key_ring().clone(),
+    );
+    let stale = authority
+        .sign(
+            csgn::Kind::Credential,
+            &request.to_bytes(),
+            0,
+            request.now() + 5,
+        )
+        .unwrap();
+    assert_eq!(
+        expected.authenticate(&stale, request.now() + 2),
+        Err(Error::InvalidPresentationRequest)
+    );
+    let valid = signed(&mut authority, &request);
+    assert_eq!(
+        expected
+            .authenticate(&valid, request.now())
+            .unwrap()
+            .to_bytes(),
+        request.to_bytes()
+    );
+}
+
+#[test]
+fn trailing_statement_bytes_are_rejected_before_decoding() {
+    use crate::wire::{Kind, Writer};
+    use ark_serialize::CanonicalSerialize;
+    let mut rng = rng();
+    let (_, passport, request) = fixture(&mut rng);
+    let proof = passport.present_trusted(&mut rng, &request).unwrap();
+    let mut statements = Vec::new();
+    for statement in &proof.proof.statement_proofs {
+        let mut raw = Vec::new();
+        statement.serialize_compressed(&mut raw).unwrap();
+        statements.push(raw);
+    }
+    assert!(statements.len() >= 2);
+    statements[0].push(0);
+    let mut w = Writer::new(Kind::Presentation);
+    w.key_id(proof.key_id());
+    w.fixed(&proof.pseudonym().to_bytes());
+    w.u16(statements.len() as u16);
+    for raw in &statements {
+        w.bytes(raw);
+    }
+    let bytes = w.finish_public();
+    assert_eq!(
+        Presentation::from_bytes(&bytes).err(),
+        Some(Error::Decode("proof shape"))
+    );
+}
+
+#[test]
+fn illformed_proofs_fail_shape_validation() {
+    let mut rng = rng();
+    let (_, passport, request) = fixture(&mut rng);
+    let proof = passport.present_trusted(&mut rng, &request).unwrap();
+    let count = proof.proof.statement_proofs.len();
+    assert!(crate::proof_wire::well_formed(&proof.proof, count, true));
+    let mut short = proof.proof.clone();
+    short.statement_proofs.pop();
+    assert!(!crate::proof_wire::well_formed(&short, count, true));
+    let mut aggregated = proof.proof.clone();
+    aggregated.aggregated_groth16 = Some(Vec::new());
+    assert!(!crate::proof_wire::well_formed(&aggregated, count, true));
+    let mut lego = proof.proof.clone();
+    lego.aggregated_legogroth16 = Some(Vec::new());
+    assert!(!crate::proof_wire::well_formed(&lego, count, true));
+    let challenge = IssuanceChallenge::generate(&mut rng);
+    let key = key(&mut rng, "shape");
+    let secret = HolderSecret::generate(&mut rng);
+    let (issuance, _) = request_issue(&mut rng, &secret, key.public_key(), &challenge).unwrap();
+    assert!(!crate::proof_wire::well_formed(&issuance.proof, 2, true));
+}
+
+#[tokio::test]
+async fn memory_store_reports_scope_and_direct_issuance_outcomes() {
+    let store = MemoryStore::new(community(), 10).unwrap();
+    assert_eq!(store.community(), &community());
+    let tag = HolderSecret::generate(&mut rng()).issuer_tag();
+    let absent = VerifiedIssuance {
+        nonce: [9; 32],
+        binding: [8; 32],
+        now: 100,
+        person: [1; 32],
+        tag,
+    };
+    assert!(!store.consume_issuance(absent).await.unwrap());
+    let present = ChallengeRecord {
+        nonce: [9; 32],
+        binding: [8; 32],
+        expires: 200,
+    };
+    assert!(store.reserve(present).await.unwrap());
+    let mismatched = VerifiedIssuance {
+        nonce: [9; 32],
+        binding: [7; 32],
+        now: 100,
+        person: [1; 32],
+        tag,
+    };
+    assert!(!store.consume_issuance(mismatched).await.unwrap());
+    let expired = VerifiedIssuance {
+        nonce: [9; 32],
+        binding: [8; 32],
+        now: 201,
+        person: [1; 32],
+        tag,
+    };
+    assert!(!store.consume_issuance(expired).await.unwrap());
+    let valid = VerifiedIssuance {
+        nonce: [9; 32],
+        binding: [8; 32],
+        now: 100,
+        person: [1; 32],
+        tag,
+    };
+    assert!(store.consume_issuance(valid).await.unwrap());
+    let consumed = VerifiedIssuance {
+        nonce: [9; 32],
+        binding: [8; 32],
+        now: 100,
+        person: [1; 32],
+        tag,
+    };
+    assert!(!store.consume_issuance(consumed).await.unwrap());
+}
+
+#[test]
+fn verified_issuance_fields_report_tuple() {
+    let tag = HolderSecret::generate(&mut rng()).issuer_tag();
+    let issuance = VerifiedIssuance {
+        nonce: [9; 32],
+        binding: [8; 32],
+        now: 100,
+        person: [1; 32],
+        tag,
+    };
+    assert_eq!(issuance.fields(), ([9; 32], [8; 32], 100, [1; 32], tag));
+}
+
+#[tokio::test]
+async fn verifier_rejects_duplicate_key_ids() {
+    let mut rng = rng();
+    let store = MemoryStore::new(community(), 10).unwrap();
+    let key = key(&mut rng, "dup");
+    assert!(matches!(
+        Verifier::new(
+            store,
+            vec![key.public_key().clone(), key.public_key().clone()]
+        ),
+        Err(Error::DuplicateKeyId)
+    ));
+}
+
+#[tokio::test]
+async fn verifier_rejects_foreign_community_and_prunes() {
+    let mut rng = rng();
+    let store = MemoryStore::new(community(), 10).unwrap();
+    let (issuer, passport, _) = fixture(&mut rng);
+    let verifier = Verifier::new(store, vec![issuer.public_key().clone()]).unwrap();
+    let foreign = PresentationRequest::new(
+        &mut rng,
+        CommunityId::new(b"community-b").unwrap(),
+        7,
+        [gate()],
+        1000,
+    )
+    .unwrap();
+    let proof = passport.present_trusted(&mut rng, &foreign).unwrap();
+    assert_eq!(
+        verifier.verify(&mut rng, &foreign, &proof, 7, 900).await,
+        Err(Error::InvalidChallenge)
+    );
+    let registered = verifier.request(&mut rng, 7, [gate()], 200).await.unwrap();
+    assert_eq!(verifier.prune(199).await.unwrap(), 0);
+    assert_eq!(verifier.prune(200).await.unwrap(), 0);
+    assert_eq!(verifier.prune(201).await.unwrap(), 1);
+    let _ = registered;
+}
+
+#[tokio::test]
+async fn verifier_request_collision_is_a_conflict() {
+    let store = MemoryStore::new(community(), 10).unwrap();
+    let verifier = Verifier::new(store, vec![]).unwrap();
+    let mut first = StdRng::seed_from_u64(77);
+    let mut second = StdRng::seed_from_u64(77);
+    let request = verifier
+        .request(&mut first, 7, [gate()], 200)
+        .await
+        .unwrap();
+    assert_eq!(request.now(), 200);
+    assert_eq!(
+        verifier.request(&mut second, 7, [gate()], 200).await,
+        Err(Error::ChallengeConflict)
+    );
+}
+
+#[tokio::test]
+async fn issuance_challenge_request_collisions_are_conflicts() {
+    let mut rng = rng();
+    let store = MemoryStore::new(community(), 10).unwrap();
+    let issuer = key(&mut rng, "collision");
+    let auth = AuthenticatedIssuance::new([1; 32], [2; 32]);
+    let mut first = StdRng::seed_from_u64(78);
+    let mut second = StdRng::seed_from_u64(78);
+    let challenge = issuance_challenge(&mut first, &store, issuer.public_key(), &auth, 200)
+        .await
+        .unwrap();
+    assert_eq!(
+        issuance_challenge(&mut second, &store, issuer.public_key(), &auth, 200).await,
+        Err(Error::ChallengeConflict)
+    );
+    let _ = challenge;
+}
+
+#[tokio::test]
+async fn unreserved_issuance_challenge_is_invalid() {
+    let mut rng = rng();
+    let store = MemoryStore::new(community(), 10).unwrap();
+    let issuer = key(&mut rng, "unreserved");
+    let secret = HolderSecret::generate(&mut rng);
+    let auth = AuthenticatedIssuance::new([1; 32], [2; 32]);
+    let challenge = IssuanceChallenge::generate(&mut rng);
+    let (request, _) = request_issue(&mut rng, &secret, issuer.public_key(), &challenge).unwrap();
+    assert_eq!(
+        issue_blind_once(
+            &mut rng,
+            &store,
+            &issuer,
+            &auth,
+            &request,
+            &challenge,
+            &attrs(),
+            90
+        )
+        .await
+        .err(),
+        Some(Error::InvalidChallenge)
+    );
+}
+
+struct StubStore {
+    community: CommunityId,
+    consume_ok: bool,
+    issuance_ok: bool,
+    consumption_attempts: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ChallengeStore for StubStore {
+    fn community(&self) -> &CommunityId {
+        &self.community
+    }
+    async fn reserve(&self, _: ChallengeRecord) -> Result<bool, Error> {
+        Ok(true)
+    }
+    async fn matches(&self, _: [u8; 32], _: [u8; 32], _: Timestamp) -> Result<bool, Error> {
+        Ok(true)
+    }
+    async fn consume(&self, _: [u8; 32], _: [u8; 32], _: Timestamp) -> Result<bool, Error> {
+        self.consumption_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.consume_ok)
+    }
+    async fn prune(&self, _: Timestamp) -> Result<u64, Error> {
+        Ok(0)
+    }
+}
+
+impl IssuanceStore for StubStore {
+    async fn consume_issuance(&self, _: VerifiedIssuance) -> Result<bool, Error> {
+        self.consumption_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.issuance_ok)
+    }
+}
+
+#[tokio::test]
+async fn lost_consumption_race_fails_closed() {
+    let mut rng = rng();
+    let (issuer, passport, request) = fixture(&mut rng);
+    let proof = passport.present_trusted(&mut rng, &request).unwrap();
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stub = StubStore {
+        community: community(),
+        consume_ok: false,
+        issuance_ok: true,
+        consumption_attempts: attempts.clone(),
+    };
+    let verifier = Verifier::new(stub, vec![issuer.public_key().clone()]).unwrap();
+    assert_eq!(
+        verifier.verify(&mut rng, &request, &proof, 7, 900).await,
+        Err(Error::InvalidChallenge)
+    );
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn lost_issuance_consumption_fails_closed() {
+    let mut rng = rng();
+    let issuer = key(&mut rng, "stub-issuance");
+    let secret = HolderSecret::generate(&mut rng);
+    let auth = AuthenticatedIssuance::new([1; 32], [2; 32]);
+    let challenge = IssuanceChallenge::generate(&mut rng);
+    let (request, _) = request_issue(&mut rng, &secret, issuer.public_key(), &challenge).unwrap();
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stub = StubStore {
+        community: community(),
+        consume_ok: true,
+        issuance_ok: false,
+        consumption_attempts: attempts.clone(),
+    };
+    assert_eq!(
+        issue_blind_once(
+            &mut rng,
+            &stub,
+            &issuer,
+            &auth,
+            &request,
+            &challenge,
+            &attrs(),
+            90
+        )
+        .await
+        .err(),
+        Some(Error::InvalidChallenge)
+    );
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

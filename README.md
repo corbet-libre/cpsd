@@ -83,7 +83,7 @@ normalizing their results before signing.
 
 Issuance uses a perfectly hiding Pedersen commitment to the secret. A Dock
 composite proof binds knowledge of that commitment's opening to an issuer-only
-tag derived from the same secret. `cglb` must bind that tag to the authenticated
+tag derived from the same secret. `cgbl` must bind that tag to the authenticated
 person's uniqueness fingerprint on first issuance and require it on renewal;
 otherwise a person could choose another secret and obtain new community IDs.
 `issue_blind_once` now enforces this binding atomically through `IssuanceStore`;

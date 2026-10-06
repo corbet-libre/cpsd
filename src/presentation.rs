@@ -79,8 +79,9 @@ impl core::fmt::Debug for Pseudonym {
 fn decode_point(bytes: &[u8]) -> Result<G1Affine, Error> {
     use ark_serialize::CanonicalDeserialize;
     let mut slice = bytes;
-    let p = G1Affine::deserialize_compressed(&mut slice).map_err(|_| Error::Decode("pseudonym"))?;
-    if !slice.is_empty() || p.is_zero() || point_bytes(&p).as_slice() != bytes {
+    let p = G1Affine::deserialize_compressed(&mut slice)
+        .map_err(crate::error::redact(Error::Decode("pseudonym")))?;
+    if !crate::wire::canonical_encoding(slice, &point_bytes(&p), bytes) || p.is_zero() {
         return Err(Error::Decode("pseudonym"));
     }
     Ok(p)
@@ -425,7 +426,7 @@ pub(crate) fn presentation_spec(
                 TIME_LIMIT,
                 0,
             )
-            .map_err(|_| Error::ProofGeneration)?,
+            .map_err(crate::error::redact(Error::ProofGeneration))?,
         );
         meta.add_witness_equality(EqualWitnesses(
             [(0, message), (index, 0)].into_iter().collect(),
@@ -537,7 +538,7 @@ pub(crate) fn prove<R: RngCore + CryptoRng>(
         Some(request.challenge.to_vec()),
         ProverConfig::default(),
     )
-    .map_err(|_| Error::ProofGeneration)?;
+    .map_err(crate::error::redact(Error::ProofGeneration))?;
     Ok(Presentation {
         key_id: issuer.key_id().clone(),
         pseudonym,
@@ -568,12 +569,8 @@ pub fn verify<R: RngCore + CryptoRng>(
         issuer.gate_slot(gate)?;
     }
 
-    let spec = presentation_spec(
-        issuer,
-        request,
-        presentation.pseudonym.point()?,
-        Side::Verifier,
-    )?;
+    let pseudonym = presentation.pseudonym.point()?;
+    let spec = presentation_spec(issuer, request, pseudonym, Side::Verifier)?;
     if !crate::proof_wire::well_formed(&presentation.proof, spec.statements.len(), true) {
         return Err(Error::InvalidProof);
     }
