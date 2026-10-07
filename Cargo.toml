@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 description = "Pseudonyms: blind credential issuance and unlinkable per-community pseudonyms"
 license = "LGPL-3.0-only WITH LGPL-3.0-linking-exception"
-repository = "https://github.com/corbet-foss/cpsd"
+repository = "https://git.corbet.ch/corbet-foss/cpsd"
 readme = "README.md"
 publish = false
 include = ["Cargo.toml", "src/**", "docs/**", "README.md", "LICENSE", "LICENSE.md", "LICENSES/LGPL-3.0-only.txt", "LICENSES/LGPL-3.0-linking-exception.txt", "LICENSES/GPL-3.0-only.txt"]
@@ -19,7 +19,7 @@ storage = ["dep:crlt"]
 
 [dependencies]
 rand_chacha = "0.3"
-csgn = { git = "https://github.com/corbet-foss/csgn", branch = "main", default-features = false }
+csgn = { git = "https://git.corbet.ch/corbet-foss/csgn", branch = "main", default-features = false }
 ark-bls12-381 = { version = "=0.4.0", default-features = false, features = ["curve"] }
 ark-ec = { version = "=0.4.2", default-features = false }
 ark-ff = { version = "=0.4.2", default-features = false }
@@ -37,7 +37,7 @@ zeroize = { version = "1.9", features = ["derive"] }
 # Circom/LegoGroth16; the backend is selected here only so that the dependency
 # compiles. Everything cpsd uses is identical on both targets.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-crlt = { git = "https://github.com/corbet-foss/crlt", branch = "main", optional = true }
+crlt = { git = "https://git.corbet.ch/corbet-foss/crlt", branch = "main", optional = true }
 proof_system = { version = "=0.34.0", default-features = false, features = ["std", "wasmer-sys"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -48,7 +48,7 @@ getrandom = { version = "0.2", features = ["js"] }
 proof_system = { version = "=0.34.0", default-features = false, features = ["wasmer-js"] }
 
 [dev-dependencies]
-csgn = { git = "https://github.com/corbet-foss/csgn", branch = "main", features = ["volatile-signer"] }
+csgn = { git = "https://git.corbet.ch/corbet-foss/csgn", branch = "main", features = ["volatile-signer"] }
 rand = { version = "0.8", features = ["std_rng"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
