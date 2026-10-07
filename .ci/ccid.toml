@@ -13,7 +13,7 @@ kind = "commands"
 commands = [["cargo", "deny", "--locked", "check", "advisories", "licenses"], ["cargo", "deny", "--manifest-path", "fuzz/Cargo.toml", "--locked", "check", "advisories", "licenses"]]
 
 [render]
-tool_revision = "77a5ac18542750de020ebf753d22c3200530282b"
+tool_revision = "223adb5a008f4ed1ba36d1f52796ccd29077db6e"
 
 [jobs.verify]
 scheduler = "crow"
