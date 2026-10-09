@@ -820,7 +820,7 @@ dependencies = [
 [[package]]
 name = "csgn"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/csgn?branch=main#eac891b771152b17aa3a903edfe9c129e43a371e"
+source = "git+https://git.corbet.ch/corbet-foss/csgn?branch=main#f11c37e903d7f533fc546a2dc87b9f9310bee283"
 dependencies = [
  "ciborium-ll",
  "coset",
