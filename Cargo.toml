@@ -10,9 +10,9 @@ readme = "README.md"
 publish = false
 include = ["Cargo.toml", "src/**", "docs/**", "README.md", "LICENSE", "LICENSE.md", "LICENSES/LGPL-3.0-only.txt", "LICENSES/LGPL-3.0-linking-exception.txt", "LICENSES/GPL-3.0-only.txt"]
 
-# Exact pins. The docknetwork crates are released together; 0.34.0 / 0.25.0 /
-# 0.23.0 / 0.9.0 are the 2025-08-03 release (git commit 0023be5). They are built
-# on arkworks 0.4, so the arkworks pins must stay on the 0.4 line.
+# Compatible ranges retain the current Dock release families. Their public
+# proof types use arkworks 0.4; changing that family requires real proof
+# compatibility qualification.
 [features]
 default = ["storage"]
 storage = ["dep:crlt"]
@@ -20,15 +20,15 @@ storage = ["dep:crlt"]
 [dependencies]
 rand_chacha = "0.3"
 csgn = { git = "https://git.corbet.ch/corbet-foss/csgn", branch = "main", default-features = false }
-ark-bls12-381 = { version = "=0.4.0", default-features = false, features = ["curve"] }
-ark-ec = { version = "=0.4.2", default-features = false }
-ark-ff = { version = "=0.4.2", default-features = false }
-ark-serialize = { version = "=0.4.2", default-features = false }
-ark-std = { version = "=0.4.0", default-features = false }
-bbs_plus = { version = "=0.25.0", default-features = false }
-blake2 = { version = "=0.10.6", default-features = false }
-bulletproofs_plus_plus = { version = "=0.9.0", default-features = false }
-dock_crypto_utils = { version = "=0.23.0", default-features = false }
+ark-bls12-381 = { version = "0.4.0", default-features = false, features = ["curve"] }
+ark-ec = { version = "0.4.2", default-features = false }
+ark-ff = { version = "0.4.2", default-features = false }
+ark-serialize = { version = "0.4.2", default-features = false }
+ark-std = { version = "0.4.0", default-features = false }
+bbs_plus = { version = "0.25.0", default-features = false }
+blake2 = { version = "0.10.6", default-features = false }
+bulletproofs_plus_plus = { version = "0.9.0", default-features = false }
+dock_crypto_utils = { version = "0.23.0", default-features = false }
 zeroize = { version = "1.9", features = ["derive"] }
 
 # `proof_system` unconditionally depends on `legogroth16` with its `circom`
@@ -38,14 +38,15 @@ zeroize = { version = "1.9", features = ["derive"] }
 # compiles. Everything cpsd uses is identical on both targets.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 crlt = { git = "https://git.corbet.ch/corbet-foss/crlt", branch = "main", optional = true }
-proof_system = { version = "=0.34.0", default-features = false, features = ["std", "wasmer-sys"] }
+proof_system = { version = "0.34.0", default-features = false, features = ["std", "wasmer-sys"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# Match Wasmer 6.1.0's upstream lockfile; newer JS bridge APIs break its backend.
-wasm-bindgen = "=0.2.104"
-js-sys = "=0.3.81"
+# Keep browser bridge dependencies compatible with downstream device crates.
+# Wasmer compatibility with the resolved bridge remains to be qualified.
+wasm-bindgen = "0.2.104"
+js-sys = "0.3.81"
 getrandom = { version = "0.2", features = ["js"] }
-proof_system = { version = "=0.34.0", default-features = false, features = ["wasmer-js"] }
+proof_system = { version = "0.34.0", default-features = false, features = ["wasmer-js"] }
 
 [dev-dependencies]
 csgn = { git = "https://git.corbet.ch/corbet-foss/csgn", branch = "main", features = ["volatile-signer"] }
@@ -56,8 +57,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 tempfile = "3"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test = "=0.3.54"
-web-sys = { version = "=0.3.81", features = ["Window", "Performance"] }
+wasm-bindgen-test = "0.3.54"
+web-sys = { version = "0.3.81", features = ["Window", "Performance"] }
 
 [lints.rust]
 unsafe_code = "forbid"
