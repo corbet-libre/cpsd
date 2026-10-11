@@ -307,16 +307,16 @@ async fn real_sql_consumption_races_once_and_survives_reopen() {
         "file://{}",
         directory.path().join("root-issuance.db").display()
     );
+    let migrations = [crlt::Migration::new(
+        1,
+        "challenges only",
+        storage::libsql::SCHEMA,
+    )];
     let first = crlt::Db::open(crlt::Config::new(&url, "")).await.unwrap();
-    first
-        .migrate(&[crlt::Migration::new(
-            1,
-            "challenges only",
-            storage::libsql::SCHEMA,
-        )])
-        .await
-        .unwrap();
+    first.migrate(&migrations).await.unwrap();
     let second = crlt::Db::open(crlt::Config::new(&url, "")).await.unwrap();
+    // Every original database handle installs its checked schema authority.
+    assert_eq!(second.migrate(&migrations).await.unwrap(), 0);
     let make =
         |db: &crlt::Db| storage::libsql::LibsqlStore::new(db, w.root_community.clone(), 2).unwrap();
     let a = make(&first);
@@ -367,6 +367,7 @@ async fn real_sql_consumption_races_once_and_survives_reopen() {
     holder.finish_root_board_issuance(&blind).unwrap();
     drop((a, b, first, second));
     let reopened = crlt::Db::open(crlt::Config::new(&url, "")).await.unwrap();
+    assert_eq!(reopened.migrate(&migrations).await.unwrap(), 0);
     let store = make(&reopened);
     assert!(matches!(
         verify_stored_root_board_issuance(&store, &keys, &context, &request, NOW).await,

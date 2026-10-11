@@ -362,6 +362,14 @@ async fn joint_root_challenge_is_consumed_once_across_sql_handles_and_reopen() {
     drop(second);
     drop(db);
     let reopened = crlt::Db::open(crlt::Config::new(&file, "")).await.unwrap();
+    // Reopening also requires the original checked schema on this handle.
+    assert_eq!(
+        reopened
+            .migrate(&[crlt::Migration::new(1, "cpsd", storage::libsql::SCHEMA)])
+            .await
+            .unwrap(),
+        0
+    );
     assert!(matches!(
         make(&reopened)
             .verify_root_board(&request, &proof, 7, NOW)
