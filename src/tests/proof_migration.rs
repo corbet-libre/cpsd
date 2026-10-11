@@ -191,3 +191,43 @@ fn v3_issuance_tag_cannot_use_an_unrelated_secret() {
         Err(Error::InvalidIssuanceRequest)
     );
 }
+
+/// Both former verifier call sites (the single-shot ordinary verification and
+/// the root-board contribute/verify-challenge halves around a shared
+/// transcript) are one implementation now and must accept and refuse the same
+/// proofs.
+#[test]
+fn single_shot_and_split_verification_agree() {
+    let mut rng = rng();
+    let issuer = key(&mut rng, "one-verifier");
+    let secret = HolderSecret::generate(&mut rng);
+    let passport = issue(&mut rng, &issuer, &secret, PassportAttributes::new(2000, 7));
+    let request = PresentationRequest::with_challenge(community(), 7, [], 1000, [5; 32]).unwrap();
+    let other = PresentationRequest::with_challenge(community(), 7, [], 1000, [6; 32]).unwrap();
+    let nym = passport.pseudonym(request.community()).point().unwrap();
+    let other_nym = {
+        use ark_ec::AffineRepr;
+        (nym.into_group() + nym.into_group()).into_affine()
+    };
+    let public = issuer.public_key();
+    let proof = crate::proof::PresentationProof::new(&mut rng, &passport, &request, &nym).unwrap();
+
+    let split = |request: &PresentationRequest, nym: &_| {
+        let mut transcript = crate::proof::presentation_transcript(public, request);
+        proof.contribute(public, request, nym, &mut transcript)?;
+        proof.verify_challenge(
+            public,
+            request,
+            nym,
+            &transcript.challenge_scalar::<Fr>(b"challenge"),
+        )
+    };
+    assert!(proof.verify(public, &request, &nym).is_ok());
+    assert!(split(&request, &nym).is_ok());
+    // A different request changes the transcript; a different pseudonym point
+    // changes the equation. Both entry points refuse both.
+    assert!(proof.verify(public, &other, &nym).is_err());
+    assert!(split(&other, &nym).is_err());
+    assert!(proof.verify(public, &request, &other_nym).is_err());
+    assert!(split(&request, &other_nym).is_err());
+}

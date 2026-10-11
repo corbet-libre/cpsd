@@ -153,14 +153,14 @@ fn range_transcript(
     transcript
 }
 
-struct RangeProtocol {
+pub(crate) struct RangeProtocol {
     range: ProofArbitraryRange<G1Affine>,
     lower: PokPedersenCommitmentProtocol<G1Affine>,
     upper: PokPedersenCommitmentProtocol<G1Affine>,
 }
 
 impl RangeProtocol {
-    fn new<R: RngCore + CryptoRng>(
+    pub(crate) fn new<R: RngCore + CryptoRng>(
         rng: &mut R,
         issuer: &IssuerPublicKey,
         request: &PresentationRequest,
@@ -203,7 +203,7 @@ impl RangeProtocol {
         })
     }
 
-    fn contribute(
+    pub(crate) fn contribute(
         &self,
         request: &PresentationRequest,
         index: usize,
@@ -219,7 +219,7 @@ impl RangeProtocol {
         )
     }
 
-    fn finish(self, challenge: &Fr) -> RangeProof {
+    pub(crate) fn finish(self, challenge: &Fr) -> RangeProof {
         RangeProof {
             range: self.range,
             lower: self.lower.gen_proof(challenge),
@@ -358,18 +358,38 @@ impl PresentationProof {
         })
     }
 
+    /// The one verifier of a presentation proof: all challenge contributions
+    /// are fed into the transcript, then every response is checked against the
+    /// challenge derived from it. Root-board statements compose the same two
+    /// halves around a transcript shared with a second proof.
     pub(crate) fn verify(
         &self,
         issuer: &IssuerPublicKey,
         request: &PresentationRequest,
         pseudonym: &G1Affine,
     ) -> Result<(), Error> {
+        let mut transcript = presentation_transcript(issuer, request);
+        self.contribute(issuer, request, pseudonym, &mut transcript)?;
+        self.verify_challenge(
+            issuer,
+            request,
+            pseudonym,
+            &transcript.challenge_scalar::<Fr>(b"challenge"),
+        )
+    }
+
+    pub(crate) fn contribute(
+        &self,
+        issuer: &IssuerPublicKey,
+        request: &PresentationRequest,
+        pseudonym: &G1Affine,
+        transcript: &mut MerlinTranscript,
+    ) -> Result<(), Error> {
         let revealed = revealed_messages(issuer, request)?;
         let ranged = ranged_messages(issuer, request)?;
         if !crate::proof_wire::well_formed(self, ranged.len()) {
             return Err(Error::InvalidProof);
         }
-        let mut transcript = presentation_transcript(issuer, request);
         let mut bytes = Vec::new();
         self.signature
             .challenge_contribution(&revealed, issuer.signature_params(), &mut bytes)
@@ -391,10 +411,24 @@ impl PresentationProof {
                 &range.upper.t,
                 request,
                 *index,
-                &mut transcript,
+                transcript,
             )?;
         }
-        let challenge = transcript.challenge_scalar::<Fr>(b"challenge");
+        Ok(())
+    }
+
+    pub(crate) fn verify_challenge(
+        &self,
+        issuer: &IssuerPublicKey,
+        request: &PresentationRequest,
+        pseudonym: &G1Affine,
+        challenge: &Fr,
+    ) -> Result<(), Error> {
+        let revealed = revealed_messages(issuer, request)?;
+        let ranged = ranged_messages(issuer, request)?;
+        if !crate::proof_wire::well_formed(self, ranged.len()) {
+            return Err(Error::InvalidProof);
+        }
         let revealed_indices: BTreeSet<usize> = revealed.keys().copied().collect();
         let response = |index| {
             self.signature
@@ -406,7 +440,7 @@ impl PresentationProof {
             || !self.pseudonym.verify(
                 pseudonym,
                 &params::community_base(request.community()),
-                &challenge,
+                challenge,
             )
         {
             return Err(Error::InvalidProof);
@@ -414,7 +448,7 @@ impl PresentationProof {
         self.signature
             .verify(
                 &revealed,
-                &challenge,
+                challenge,
                 issuer.bbs_public_key().clone(),
                 issuer.signature_params().clone(),
             )
@@ -425,8 +459,8 @@ impl PresentationProof {
             let (lower, upper) = range_commitments(&range.range, request)?;
             if range.lower.response1 != signed_response
                 || range.upper.response1 != signed_response
-                || !range.lower.verify(&lower, &g, &h, &challenge)
-                || !range.upper.verify(&upper, &g, &h, &challenge)
+                || !range.lower.verify(&lower, &g, &h, challenge)
+                || !range.upper.verify(&upper, &g, &h, challenge)
             {
                 return Err(Error::InvalidProof);
             }

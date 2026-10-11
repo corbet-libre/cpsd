@@ -636,8 +636,8 @@ fn root_presentation_codec_rejects_independent_expiry_proofs_for_root_credential
             &root_proof.pseudonym().point().unwrap(),
         )
         .unwrap();
-    w.root_board_proof(&global_direct);
-    w.root_board_proof(&root_direct);
+    w.proof(&global_direct);
+    w.proof(&root_direct);
     assert_eq!(
         RootBoardPresentation::from_bytes(&w.finish_public()).err(),
         Some(Error::InvalidRootBoard)
@@ -685,14 +685,14 @@ fn root_issuance_wire_rejects_identity_commitments_and_foreign_blind_issuers() {
     let key_id = r.key_id().unwrap();
     let pseudonym = r.fixed::<48>().unwrap();
     let _: G1Affine = r.ark("root commitment").unwrap();
-    let proof = r.root_board_proof().unwrap();
+    let proof = r.proof().unwrap();
     let opening = r.bytes().unwrap();
     r.finish().unwrap();
     let mut w = Writer::new(Kind::RootBoardIssuanceRequest);
     w.key_id(&key_id);
     w.fixed(&pseudonym);
     w.ark(&G1Affine::zero());
-    w.root_board_proof(&proof);
+    w.proof(&proof);
     w.bytes(opening);
     assert_eq!(
         RootBoardIssuanceRequest::from_bytes(&w.finish_public()).err(),

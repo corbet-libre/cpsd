@@ -85,8 +85,8 @@ impl RootBoardPresentation {
         let mut w = Writer::new(Kind::RootBoardPresentation);
         w.key_id(&self.global_key);
         w.fixed(&self.pseudonym.to_bytes());
-        w.root_board_proof(&self.global);
-        w.root_board_proof(&self.root);
+        w.proof(&self.global);
+        w.proof(&self.root);
         w.finish_public()
     }
     /// Strict bounded proof decoder. The claimed pseudonym remains untrusted.
@@ -94,8 +94,8 @@ impl RootBoardPresentation {
         let mut r = Reader::new(bytes, Kind::RootBoardPresentation)?;
         let global_key = r.key_id()?;
         let pseudonym = Pseudonym::from_bytes(&r.fixed::<48>()?)?;
-        let global = r.root_board_proof()?;
-        let root = r.root_board_proof()?;
+        let global = r.proof()?;
+        let root = r.proof()?;
         r.finish()?;
         if !root.ranges.is_empty() {
             return Err(Error::InvalidRootBoard);

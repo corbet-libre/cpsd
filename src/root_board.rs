@@ -13,7 +13,6 @@ use crate::{
 
 mod issuance;
 mod proof;
-mod proof_wire;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use proof::PresentationProof as TestRootProof;
 

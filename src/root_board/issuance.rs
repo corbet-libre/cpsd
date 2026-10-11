@@ -115,7 +115,7 @@ impl RootBoardIssuanceRequest {
         w.key_id(&self.global_key);
         w.fixed(&self.source_pseudonym.to_bytes());
         w.ark(&self.commitment);
-        w.root_board_proof(&self.passport);
+        w.proof(&self.passport);
         w.ark(&self.opening);
         w.finish_public()
     }
@@ -126,7 +126,7 @@ impl RootBoardIssuanceRequest {
         let global_key = r.key_id()?;
         let source_pseudonym = Pseudonym::from_bytes(&r.fixed::<48>()?)?;
         let commitment: G1Affine = r.ark("root commitment")?;
-        let passport = r.root_board_proof()?;
+        let passport = r.proof()?;
         let opening = r.ark("root opening proof")?;
         r.finish()?;
         if commitment.is_zero() {
