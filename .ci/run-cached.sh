@@ -8,14 +8,16 @@ exec 2>&1
 : "${CI_COMMIT_SHA:?Missing verified source revision}"
 : "${CI_REPOSITORY_URL:?Missing canonical repository identity}"
 : "${CHECKS:?Missing declared check selection}"
-if [ "$CHECKS" != "verify,advisories" ]; then
-  echo "CHECKS must be exactly 'verify,advisories', got: $CHECKS" >&2
+if [ "$CHECKS" != "verify,advisories" ] && [ "$CHECKS" != "resolve-dependencies" ]; then
+  echo "CHECKS must be verify,advisories or resolve-dependencies, got: $CHECKS" >&2
   exit 2
 fi
 cache_root=${CI_CACHE_ROOT:-${CARGO_HOME:-}}
 [[ $cache_root = /* ]] || { echo 'An absolute persistent CI_CACHE_ROOT or CARGO_HOME is required' >&2; exit 2; }
 namespace=$(printf '%s' "$CI_REPOSITORY_URL" | sha256sum | cut -c1-24)
 state="$cache_root/ccid-cached/$namespace"
+export ARTIFACT_ROOT="$state/release-artifacts"
+mkdir -p "$ARTIFACT_ROOT"
 toolchains=${CI_TOOLCHAIN_ROOT:-$cache_root/ccid-cached/toolchains}
 [[ $toolchains = /* ]] || { echo 'CI_TOOLCHAIN_ROOT must be absolute' >&2; exit 2; }
 mkdir -p "$state" "$toolchains"
@@ -103,4 +105,7 @@ rustup run nightly cargo llvm-cov --version
 # libsql-ffi runs bindgen at build time and wasmer-sys needs a C toolchain;
 # execute BOTH checks inside the pinned shell (NAR-pinned revision in check-shell.nix).
 # Re-prepend the verified ccid directory inside the shell so `ccid` on PATH stays exact.
-nix-shell .ci/check-shell.nix --run 'export PATH="$(dirname "$CCID_BIN"):$PATH"; set -e; "$CCID_BIN" cached --repo "$PWD" --check verify; test -s ".ccid/results/verify.jsonl"; exec "$CCID_BIN" check --repo "$PWD" --check advisories'
+nix-shell .ci/check-shell.nix --run 'export PATH="$(dirname "$CCID_BIN"):$PATH"; set -e; if [ "$CHECKS" = "resolve-dependencies" ]; then
+  exec "$CCID_BIN" check --repo "$PWD" --check "$CHECKS"
+fi
+"$CCID_BIN" cached --repo "$PWD" --check verify; test -s ".ccid/results/verify.jsonl"; exec "$CCID_BIN" check --repo "$PWD" --check advisories'
