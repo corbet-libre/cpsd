@@ -45,7 +45,10 @@ pub(crate) enum Kind {
 impl Kind {
     fn version(self) -> u8 {
         match self {
-            Self::OpaqueHolderWithRootBoard
+            Self::IssuanceRequest
+            | Self::PresentationRequest
+            | Self::Presentation
+            | Self::OpaqueHolderWithRootBoard
             | Self::RootBoardState
             | Self::RootBoardPublicKey
             | Self::RootBoardIssuanceContext

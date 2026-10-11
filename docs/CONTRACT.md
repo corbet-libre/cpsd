@@ -1,4 +1,4 @@
-# cpsd contract, wire format version 2
+# cpsd contract, durable state v2 and exchange proofs v3
 
 Rust facade over Dock BBS+ and composite proofs. Native and wasm32 holder and
 verifier core. LGPL-3.0-only WITH LGPL-3.0-linking-exception. No own cryptographic
@@ -105,8 +105,9 @@ real Turso tests skip unless both environment credentials are supplied.
 The browser acceptance target is enforced for the recommended common-expiry
 profile. Independent hidden-expiry proofs are measured but currently exceed
 one second with multiple predicates. Mobile performance remains unmeasured.
-Envelope version 2 rejects the earlier development format; the signed message
-layout and cryptographic domain labels remain v1 (issuance storage binding is v2). Accumulator revocation remains future work.
+Durable state uses envelope v2; exchange proofs and authenticated presentation
+requests use original v3. The signed message layout remains v1 and issuance
+storage binding remains v2. Accumulator revocation remains future work.
 
 ## Trust and audit boundaries
 
@@ -192,9 +193,9 @@ foreign state refuses intact and is never stripped or resealed as a non-root hol
 
 Root-board descriptors, issuance contexts, proofs and joint presentation retain
 their original v3 kinds and Dock protocols. Nested presentation requests use the
-private original v3 framing; the normal exported request/proof codecs remain v2.
-Root authentication may read the original source's signed v3 request inside the
-complete authenticated root context, without changing ordinary v2 authentication.
+same exact canonical v3 framing as the ordinary owner. Root authentication reads
+the original signed v3 request inside the complete authenticated root context;
+no v2 exchange frame is relabeled or upgraded.
 Source role authorization and atomic nonce consumption remain duties of the
 original service before signature release. This library supplies no admin role.
 
@@ -205,3 +206,23 @@ and browser execution of this additive root-board stage remains unqualified.
 The preceding v2 baseline passed native Clippy, 75 Rust tests and six compile-fail
 doctests. The additive root-board stage still has source/format checks only; its
 native/browser tests have not executed and complete custody readiness is not claimed.
+
+
+## Original lower Dock proof migration
+
+The ordinary issuance and presentation paths now use the preserved original v3
+BBS+/Schnorr/Bulletproofs++ composition directly, with no general proof-system
+or Wasmer dependency. Only exchange kinds 3, 8 and 9 change to v3. Keys,
+passports, pending issuance, ordinary sealed holder state and the original
+root-board formats keep their exact existing encodings. Restoring state does not
+upgrade an old signed request or exchange proof. The private verified root
+issuance signing step and existing scoped nonce storage remain unchanged.
+
+[PROOF-V3.md](PROOF-V3.md) defines the exact original transcripts and strict wire
+shapes. Tests retain the real current holder, privacy, SQLite and root-board
+scenarios and add original deterministic cross-target proof vectors and hostile
+compositions made from maintained primitives. The preserved source contained
+two old general-proof shape tests; these now exercise equivalent trailing-byte,
+missing-range, partial-signature and oversized-range refusal in the fixed v3
+codec. Source formatting has passed; compilation, browser execution and actual
+cross-target vector equality of this port remain unqualified.

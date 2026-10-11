@@ -33,22 +33,15 @@ schnorr_pok = { version = "0.23.0", default-features = false }
 zeroize = { version = "1.9", features = ["derive"] }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "zeroize"] }
 
-# `proof_system` unconditionally depends on `legogroth16` with its `circom`
-# feature, which needs a `wasmer` backend: the native `sys` backend cannot be
-# compiled for wasm32 and the `js` backend only exists there. cpsd never uses
-# Circom/LegoGroth16; the backend is selected here only so that the dependency
-# compiles. Everything cpsd uses is identical on both targets.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 crlt = { git = "https://git.corbet.ch/corbet-foss/crlt", branch = "main", optional = true }
-proof_system = { version = "0.34.0", default-features = false, features = ["std", "wasmer-sys"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Keep browser bridge dependencies compatible with downstream device crates.
-# Wasmer compatibility with the resolved bridge remains to be qualified.
+# Original lower Dock protocols do not require a Wasmer backend.
 wasm-bindgen = "0.2.104"
 js-sys = "0.3.81"
 getrandom = { version = "0.2", features = ["js"] }
-proof_system = { version = "0.34.0", default-features = false, features = ["wasmer-js"] }
 
 [dev-dependencies]
 csgn = { git = "https://git.corbet.ch/corbet-foss/csgn", branch = "main", features = ["volatile-signer"] }

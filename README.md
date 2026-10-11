@@ -26,9 +26,11 @@ a production security certification. No registry publication.
    `verify` checks the proof against the verifier's own request and trusted key
    ring and returns a `Pseudonym`, usable as the community member ID.
 
-Structured wire types have versioned `to_bytes`/`from_bytes` methods. The envelope is
-version 2, rejecting earlier development encodings; the signed message layout
-and cryptographic domain labels retain their v1 definition. Holder vault
+Structured wire types have versioned `to_bytes`/`from_bytes` methods. Issuance
+requests, authenticated presentation requests and presentations use the original
+v3 proof protocol and strictly refuse v2 exchange frames. Keys, passports, pending
+issuance and sealed holders retain their v2 encodings and v1 signed message
+layout. The migration and exact maintained transcripts are in [PROOF-V3.md](docs/PROOF-V3.md). Holder vault
 encodings contain secrets and return zeroizing buffers. Issuer key backups
 belong in the caller's secret store. Randomness uses caller-supplied
 `rand` 0.8 `RngCore + CryptoRng`; browser callers must seed from the OS/browser
@@ -45,7 +47,7 @@ Reviewed upstream sources and crates.io's index on 2026-09-30:
 
 | Candidate | Decision |
 |---|---|
-| [Dock crypto](https://github.com/docknetwork/crypto): [`bbs_plus` 0.25.0](https://crates.io/crates/bbs_plus), [`proof_system` 0.34.0](https://crates.io/crates/proof_system), `bulletproofs_plus_plus` 0.9.0, `dock_crypto_utils` 0.23.0 (Apache-2.0) | Selected. Blind BBS+ issuance, composite witness equalities, hidden range predicates, and an upstream Wasm path. These are the latest published releases found in the registry index, dated 2025-08-03; maintenance is uneven, not assumed current merely from the project name. Exact versions preserve the reviewed proof encoding. |
+| [Dock crypto](https://github.com/docknetwork/crypto): [`bbs_plus` 0.25.0](https://crates.io/crates/bbs_plus), [`schnorr_pok` 0.23.0](https://crates.io/crates/schnorr_pok), `bulletproofs_plus_plus` 0.9.0, `dock_crypto_utils` 0.23.0 (Apache-2.0) | Selected. Blind BBS+ issuance, composite witness equalities, hidden range predicates, and an upstream Wasm path. These are the latest published releases found in the registry index, dated 2025-08-03; maintenance is uneven, not assumed current merely from the project name. The original v3 composition uses these maintained protocol APIs directly. |
 | [Dock pseudonyms](https://github.com/docknetwork/crypto-wasm-ts#pseudonyms) | Selected composition: a one-base Pedersen/Schnorr statement with its secret equated to the hidden BBS+ message. Upstream primitives implement all cryptography. |
 | [Dock SyRA](https://github.com/docknetwork/crypto/tree/main/syra) (Apache-2.0) | Reviewed but unnecessary here: SyRA handles low-entropy credential attributes through a different issuance protocol. Our holder secret is uniformly random and high entropy. |
 | [zkryptium](https://github.com/Cybersecurity-LINKS/zkryptium) (Apache-2.0) | Useful IETF draft reference/fallback, not selected: research implementation and a different suite; it does not supply this composite range-proof/accumulator path. Its optional CL03/GMP path must not be confused with its BBS features. |
@@ -62,16 +64,13 @@ dependency is permitted. The package's own LGPL linking exception is unchanged. 
 resolved license inventory against reviewed expressions; `self_cell` uses its
 Apache-2.0 alternative, not its optional GPL license.
 
-`proof_system` unconditionally pulls Circom/LegoGroth16 and Wasmer even though
-cpsd never uses them. We select Wasmer's native backend on native and JavaScript
-backend on Wasm. This is substantial upstream dependency overhead. Our decoder
-only accepts the BBS+/Schnorr/Bulletproofs++ proof variants used here.
-Wasmer 6.1.0 fails against the newer typed JavaScript function and Wasm pointer
-APIs, so the Wasm bridge is pinned to its [upstream lockfile's compatible
-versions](https://github.com/wasmerio/wasmer/blob/v6.1.0/Cargo.lock):
-`wasm-bindgen` 0.2.104 and `js-sys`/`web-sys` 0.3.81. The test runner uses the
-matching version. Review this compatibility constraint when upgrading Dock;
-no Wasmer or cryptographic implementation is forked here.
+The original v3 composition uses Dock's BBS+, Schnorr and arbitrary-range
+protocols directly. Shared message blindings and the original common Merlin
+challenge enforce the existing secret and expiry equalities. This removes the
+unrelated Circom/LegoGroth16/Wasmer dependency of the former general proof
+facade. No cryptographic primitive is reimplemented and no legacy exchange
+proof is accepted by changing its version. Existing holder state is retained;
+native/browser conformance of this port remains to be executed.
 
 ## Security decisions
 

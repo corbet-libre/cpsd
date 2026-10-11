@@ -1,3 +1,5 @@
+mod proof_migration;
+
 use crate::test_support::TestPresentation;
 use std::{collections::BTreeSet, time::Instant};
 
@@ -323,47 +325,56 @@ fn reject_invalid_identifiers_catalogues_and_untrusted_encodings() {
 
 #[test]
 fn malformed_proof_shapes_fail_before_upstream_verification() {
-    use proof_system::statement_proof::StatementProof;
     let mut rng = rng();
     let (key, passport, req) = fixture(&mut rng);
     let good = passport.present_trusted(&mut rng, &req).unwrap();
-    for case in 0..6 {
+    for case in 0..7 {
         let mut bad = good.clone();
         match case {
             0 => {
-                bad.proof.statement_proofs.pop();
+                bad.proof.ranges.pop();
             }
             1 => {
-                bad.proof
-                    .statement_proofs
-                    .push(bad.proof.statement_proofs[0].clone());
+                bad.proof.ranges.push(bad.proof.ranges[0].clone());
             }
             2 => {
-                bad.proof.statement_proofs.swap(0, 1);
+                bad.proof.ranges.swap(0, 1);
             }
             3 => {
-                if let StatementProof::BoundCheckBpp(p) = &mut bad.proof.statement_proofs[2] {
-                    p.bpp_proof.V.push(p.bpp_proof.V[0]);
-                }
+                let range = &mut bad.proof.ranges[0].range;
+                range.V.push(range.V[0]);
             }
             4 => {
-                if let StatementProof::PedersenCommitmentPartial(p) =
-                    &mut bad.proof.statement_proofs[1]
-                {
-                    p.response.total_responses = usize::MAX;
-                }
+                bad.proof.signature.sc_resp_2 = None;
+            }
+            5 => {
+                bad.proof.ranges[0].range.V.pop();
             }
             _ => {
                 bad.pseudonym = HolderSecret::generate(&mut rng).pseudonym(&community());
             }
         }
         assert!(verify(&mut rng, &[key.public_key().clone()], &req, &bad).is_err());
-        // Removing a range statement leaves a decodable smaller proof; only
-        // the verifier knows the requested gate count.
-        if (1..=4).contains(&case) {
+        if (3..=5).contains(&case) {
             assert!(Presentation::from_bytes(&bad.to_bytes()).is_err());
         }
     }
+    // Fields now have fixed roles, so swapping signature/pseudonym bytes must
+    // fail decoding instead of supplying a general statement enum.
+    let bytes = good.to_bytes();
+    let key_len = u32::from_be_bytes(bytes[6..10].try_into().unwrap()) as usize;
+    let first = 10 + key_len + 48;
+    let sig_len = u32::from_be_bytes(bytes[first..first + 4].try_into().unwrap()) as usize;
+    let second = first + 4 + sig_len;
+    let third = second + 4 + 80;
+    let swapped = [
+        &bytes[..first],
+        &bytes[second..third],
+        &bytes[first..second],
+        &bytes[third..],
+    ]
+    .concat();
+    assert!(Presentation::from_bytes(&swapped).is_err());
 }
 
 #[test]
@@ -468,7 +479,7 @@ fn shared_epoch_proofs_bind_expiry_profile_and_all_requested_gates() {
     let request = PresentationRequest::from_bytes(&request.to_bytes()).unwrap();
     assert_eq!(request.epoch_expiry(), Some(1500));
     let proof = passport.present_trusted(&mut rng, &request).unwrap();
-    assert_eq!(proof.proof.statement_proofs.len(), 2);
+    assert!(proof.proof.ranges.is_empty());
     let proof = Presentation::from_bytes(&proof.to_bytes()).unwrap();
     assert_eq!(
         verify(&mut rng, &[issuer.public_key().clone()], &request, &proof).unwrap(),
@@ -741,66 +752,99 @@ fn all_ark_fields_require_decode_encode_identity() {
 
 #[test]
 fn unrelated_pseudonym_secret_without_witness_equality_is_rejected() {
-    use crate::presentation::{Side, presentation_spec, revealed_messages};
+    use crate::params::IDX_SECRET;
+    use ark_bls12_381::Fr;
     use ark_ec::CurveGroup;
-    use proof_system::{
-        meta_statement::MetaStatements,
-        proof::Proof,
-        prover::ProverConfig,
-        witness::{PoKBBSSignatureG1, Witness, Witnesses},
-    };
+    use ark_std::UniformRand;
+    use bbs_plus::proof::PoKOfSignatureG1Protocol;
+    use dock_crypto_utils::{signature::MessageOrBlinding, transcript::Transcript};
+    use schnorr_pok::discrete_log::PokDiscreteLogProtocol;
     let mut rng = rng();
     let issuer = key(&mut rng, "equality");
     let holder = HolderSecret::generate(&mut rng);
     let passport = issue(&mut rng, &issuer, &holder, PassportAttributes::new(1500, 7));
     let request = PresentationRequest::for_epoch(&mut rng, community(), 7, [], 1000, 1500).unwrap();
     let unrelated = HolderSecret::generate(&mut rng);
-    let point = (crate::params::community_base(request.community()) * unrelated.0).into_affine();
-    let mut spec = presentation_spec(issuer.public_key(), &request, point, Side::Prover).unwrap();
-    spec.meta_statements = MetaStatements::new();
-    let revealed = revealed_messages(issuer.public_key(), &request).unwrap();
-    let hidden = passport
-        .messages()
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| !revealed.contains_key(i))
-        .map(|(i, m)| (i, *m))
-        .collect();
-    let mut witnesses = Witnesses::new();
-    witnesses.add(PoKBBSSignatureG1::new_as_witness(
-        passport.signature.clone(),
-        hidden,
-    ));
-    witnesses.add(Witness::PedersenCommitment(vec![unrelated.0]));
-    let (proof, _) = Proof::new::<_, blake2::Blake2b512>(
+    let base = crate::params::community_base(request.community());
+    let point = (base * unrelated.0).into_affine();
+    let revealed = crate::presentation::revealed_messages(issuer.public_key(), &request).unwrap();
+    let messages = passport.messages();
+    let shared = Fr::rand(&mut rng);
+    let signature = PoKOfSignatureG1Protocol::init(
         &mut rng,
-        spec,
-        witnesses,
-        Some(request.challenge().to_vec()),
-        ProverConfig::default(),
+        &passport.signature,
+        issuer.public_key().signature_params(),
+        messages.iter().enumerate().map(|(i, m)| {
+            if revealed.contains_key(&i) {
+                MessageOrBlinding::RevealMessage(m)
+            } else if i == IDX_SECRET {
+                MessageOrBlinding::BlindMessageWithConcreteBlinding {
+                    message: m,
+                    blinding: shared,
+                }
+            } else {
+                MessageOrBlinding::BlindMessageRandomly(m)
+            }
+        }),
     )
     .unwrap();
+    let nym = PokDiscreteLogProtocol::init(unrelated.0, shared, &base);
+    let mut transcript = crate::proof::presentation_transcript(issuer.public_key(), &request);
+    let mut bytes = Vec::new();
+    signature
+        .challenge_contribution(
+            &revealed,
+            issuer.public_key().signature_params(),
+            &mut bytes,
+        )
+        .unwrap();
+    transcript.append_message(b"signature", &bytes);
+    bytes.clear();
+    nym.challenge_contribution(&base, &point, &mut bytes)
+        .unwrap();
+    transcript.append_message(b"pseudonym", &bytes);
+    let challenge = transcript.challenge_scalar::<Fr>(b"challenge");
+    let signature = signature.gen_proof(&challenge).unwrap();
+    let nym = nym.gen_proof(&challenge);
+    // Each maintained primitive is valid on its own. The only violated
+    // relation is the original required equality of the two hidden secrets.
+    signature
+        .verify(
+            &revealed,
+            &challenge,
+            issuer.public_key().bbs_public_key().clone(),
+            issuer.public_key().signature_params().clone(),
+        )
+        .unwrap();
+    assert!(nym.verify(&point, &base, &challenge));
     let mut forgery = passport.present_trusted(&mut rng, &request).unwrap();
-    forgery.proof = proof;
+    forgery.proof = crate::proof::PresentationProof {
+        signature,
+        pseudonym: nym,
+        ranges: vec![],
+    };
     forgery.pseudonym = unrelated.pseudonym(request.community());
     assert_eq!(
         verify(&mut rng, &[issuer.public_key().clone()], &request, &forgery),
         Err(Error::InvalidProof)
     );
-    assert!(Presentation::from_bytes(&forgery.to_bytes()).is_err());
+    // V3 contains full responses: a structurally valid inequality is rejected
+    // by verification, whereas the old partial-proof format rejected decoding.
+    let decoded = Presentation::from_bytes(&forgery.to_bytes()).unwrap();
+    assert_eq!(
+        verify(&mut rng, &[issuer.public_key().clone()], &request, &decoded),
+        Err(Error::InvalidProof)
+    );
 }
 
 #[test]
 fn issuance_commitment_cannot_add_generators_for_issuer_owned_attributes() {
-    use crate::params::{Curve, IDX_EPOCH, IDX_SECRET};
+    use crate::params::{IDX_EPOCH, IDX_SECRET};
     use ark_bls12_381::Fr;
     use ark_ec::CurveGroup;
-    use proof_system::{
-        proof::Proof,
-        prover::ProverConfig,
-        statement::{Statements, ped_comm::PedersenCommitment},
-        witness::{Witness, Witnesses},
-    };
+    use ark_serialize::CanonicalSerialize;
+    use dock_crypto_utils::transcript::Transcript;
+    use schnorr_pok::{SchnorrChallengeContributor, SchnorrCommitment};
     let mut rng = rng();
     let issuer = key(&mut rng, "extra-generator");
     let secret = HolderSecret::generate(&mut rng);
@@ -808,43 +852,47 @@ fn issuance_commitment_cannot_add_generators_for_issuer_owned_attributes() {
     let params = issuer.public_key().signature_params();
     let blind = Fr::from(11u64);
     let extra = Fr::from(7u64);
-    let commitment =
-        (params.h_0 * blind + params.h[IDX_SECRET] * secret.0 + params.h[IDX_EPOCH] * extra)
-            .into_affine();
-    let tag = (crate::params::issuer_tag_base() * secret.0).into_affine();
-    let mut spec = crate::issuer::issuance_spec(issuer.public_key(), commitment, tag);
-    let mut statements = Statements::<Curve>::new();
-    statements.add(PedersenCommitment::new_statement_from_params::<Curve>(
-        vec![params.h_0, params.h[IDX_SECRET], params.h[IDX_EPOCH]],
-        commitment,
-    ));
-    statements.add(PedersenCommitment::new_statement_from_params::<Curve>(
-        vec![crate::params::issuer_tag_base()],
-        tag,
-    ));
-    spec.statements = statements;
-    let mut witnesses = Witnesses::new();
-    witnesses.add(Witness::PedersenCommitment(vec![blind, secret.0, extra]));
-    witnesses.add(Witness::PedersenCommitment(vec![secret.0]));
-    let (proof, _) = Proof::new::<_, blake2::Blake2b512>(
-        &mut rng,
-        spec,
-        witnesses,
-        Some(challenge.to_bytes().to_vec()),
-        ProverConfig::default(),
-    )
-    .unwrap();
-    let request = IssuanceRequest {
-        key_id: issuer.public_key().key_id().clone(),
-        commitment,
-        issuer_tag: tag,
-        proof,
-    };
+    let bases = [params.h_0, params.h[IDX_SECRET], params.h[IDX_EPOCH]];
+    let commitment = (bases[0] * blind + bases[1] * secret.0 + bases[2] * extra).into_affine();
+    let protocol = SchnorrCommitment::new(
+        &bases,
+        vec![Fr::from(13u64), Fr::from(17u64), Fr::from(19u64)],
+    );
+    let mut transcript = crate::proof::issuance_transcript(issuer.public_key(), &challenge);
+    let mut contribution = Vec::new();
+    bases.serialize_compressed(&mut contribution).unwrap();
+    commitment.serialize_compressed(&mut contribution).unwrap();
+    protocol.challenge_contribution(&mut contribution).unwrap();
+    transcript.append_message(b"opening", &contribution);
+    let scalar = transcript.challenge_scalar::<Fr>(b"challenge");
+    let response = protocol
+        .response(&[blind, secret.0, extra], &scalar)
+        .unwrap();
+    response
+        .is_valid(&bases, &commitment, &protocol.t, &scalar)
+        .unwrap();
+    let (mut request, _) =
+        request_issue(&mut rng, &secret, issuer.public_key(), &challenge).unwrap();
+    request.commitment = commitment;
     assert!(matches!(
         issuer.issue_blind(&mut rng, &request, &challenge, &attrs()),
         Err(Error::InvalidIssuanceRequest)
     ));
-    assert!(IssuanceRequest::from_bytes(&request.to_bytes()).is_err());
+    // A real three-generator proof cannot enter the fixed two-generator wire.
+    let mut w = crate::wire::Writer::new(crate::wire::Kind::IssuanceRequest);
+    w.key_id(issuer.public_key().key_id());
+    w.ark(&commitment);
+    w.ark(&request.issuer_tag);
+    let mut extra_proof = Vec::new();
+    protocol.t.serialize_compressed(&mut extra_proof).unwrap();
+    response.serialize_compressed(&mut extra_proof).unwrap();
+    request
+        .proof
+        .tag
+        .serialize_compressed(&mut extra_proof)
+        .unwrap();
+    w.bytes(&extra_proof);
+    assert!(IssuanceRequest::from_bytes(&w.finish_public()).is_err());
 }
 
 #[test]
@@ -1584,24 +1632,24 @@ fn trailing_statement_bytes_are_rejected_before_decoding() {
     let mut rng = rng();
     let (_, passport, request) = fixture(&mut rng);
     let proof = passport.present_trusted(&mut rng, &request).unwrap();
-    let mut statements = Vec::new();
-    for statement in &proof.proof.statement_proofs {
-        let mut raw = Vec::new();
-        statement.serialize_compressed(&mut raw).unwrap();
-        statements.push(raw);
-    }
-    assert!(statements.len() >= 2);
-    statements[0].push(0);
+    let mut signature = Vec::new();
+    proof
+        .proof
+        .signature
+        .serialize_compressed(&mut signature)
+        .unwrap();
+    signature.push(0);
     let mut w = Writer::new(Kind::Presentation);
     w.key_id(proof.key_id());
     w.fixed(&proof.pseudonym().to_bytes());
-    w.u16(statements.len() as u16);
-    for raw in &statements {
-        w.bytes(raw);
+    w.bytes(&signature);
+    w.ark(&proof.proof.pseudonym);
+    w.u16(proof.proof.ranges.len() as u16);
+    for range in &proof.proof.ranges {
+        w.ark(range);
     }
-    let bytes = w.finish_public();
     assert_eq!(
-        Presentation::from_bytes(&bytes).err(),
+        Presentation::from_bytes(&w.finish_public()).err(),
         Some(Error::Decode("proof shape"))
     );
 }
@@ -1611,22 +1659,18 @@ fn illformed_proofs_fail_shape_validation() {
     let mut rng = rng();
     let (_, passport, request) = fixture(&mut rng);
     let proof = passport.present_trusted(&mut rng, &request).unwrap();
-    let count = proof.proof.statement_proofs.len();
-    assert!(crate::proof_wire::well_formed(&proof.proof, count, true));
+    let count = proof.proof.ranges.len();
+    assert!(crate::proof_wire::well_formed(&proof.proof, count));
     let mut short = proof.proof.clone();
-    short.statement_proofs.pop();
-    assert!(!crate::proof_wire::well_formed(&short, count, true));
-    let mut aggregated = proof.proof.clone();
-    aggregated.aggregated_groth16 = Some(Vec::new());
-    assert!(!crate::proof_wire::well_formed(&aggregated, count, true));
-    let mut lego = proof.proof.clone();
-    lego.aggregated_legogroth16 = Some(Vec::new());
-    assert!(!crate::proof_wire::well_formed(&lego, count, true));
-    let challenge = IssuanceChallenge::generate(&mut rng);
-    let key = key(&mut rng, "shape");
-    let secret = HolderSecret::generate(&mut rng);
-    let (issuance, _) = request_issue(&mut rng, &secret, key.public_key(), &challenge).unwrap();
-    assert!(!crate::proof_wire::well_formed(&issuance.proof, 2, true));
+    short.ranges.pop();
+    assert!(!crate::proof_wire::well_formed(&short, count));
+    let mut partial = proof.proof.clone();
+    partial.signature.sc_resp_2 = None;
+    assert!(!crate::proof_wire::well_formed(&partial, count));
+    let mut oversized = proof.proof.clone();
+    let point = oversized.ranges[0].range.V[0];
+    oversized.ranges[0].range.V.push(point);
+    assert!(!crate::proof_wire::well_formed(&oversized, count));
 }
 
 #[tokio::test]

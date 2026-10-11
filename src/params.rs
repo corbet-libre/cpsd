@@ -55,8 +55,6 @@ const DOMAIN_KEY_ID: &[u8] = b"cpsd/v1/key-id";
 const DOMAIN_COMMUNITY_BASE: &[u8] = b"cpsd/v1/community-pseudonym-base";
 const DOMAIN_ISSUER_TAG_BASE: &[u8] = b"cpsd/v1/issuer-tag-base";
 const DOMAIN_RANGE_PROOF: &[u8] = b"cpsd/v1/bulletproofs-plus-plus-range-proof";
-pub(crate) const DOMAIN_ISSUANCE: &[u8] = b"cpsd/v1/issuance";
-pub(crate) const DOMAIN_PRESENTATION: &[u8] = b"cpsd/v1/presentation";
 
 /// Unambiguous byte string builder for labels and proof contexts: every
 /// variable-length field is length-prefixed.
@@ -129,7 +127,7 @@ pub(crate) fn issuer_tag_base() -> G1Affine {
 }
 
 /// Bulletproofs++ setup for one arbitrary-range proof of a 64-bit value in
-/// base 2 (the configuration `proof_system`'s `BoundCheckBpp` uses).
+/// base 2, as used by Dock's maintained arbitrary-range protocol.
 pub(crate) fn range_proof_params() -> &'static BppSetupParams<G1Affine> {
     static PARAMS: OnceLock<BppSetupParams<G1Affine>> = OnceLock::new();
     PARAMS.get_or_init(|| {

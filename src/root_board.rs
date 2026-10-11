@@ -17,22 +17,17 @@ mod proof_wire;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use proof::PresentationProof as TestRootProof;
 
-// Root-board v3 embeds the original v3 request framing. The request body is
-// unchanged from v2; ordinary exported request codecs continue to accept v2 only.
-// Keep this compatibility conversion private to the complete root statement.
+// Root-board embeds the exact canonical v3 request used by the ordinary owner.
+// No old request or proof is accepted by rewriting its envelope version.
 pub(crate) fn request_bytes(request: &PresentationRequest) -> Vec<u8> {
-    let mut bytes = request.to_bytes();
-    bytes[4] = 3;
-    bytes
+    request.to_bytes()
 }
 
 pub(crate) fn request_from_bytes(bytes: &[u8]) -> Result<PresentationRequest, Error> {
     if bytes.len() > crate::wire::MAX_ENCODED_LEN || !bytes.starts_with(b"cpsd\x03\x08") {
         return Err(Error::Decode("root request version"));
     }
-    let mut ordinary = bytes.to_vec();
-    ordinary[4] = 2;
-    let request = PresentationRequest::from_bytes(&ordinary)?;
+    let request = PresentationRequest::from_bytes(bytes)?;
     if request_bytes(&request) != bytes {
         return Err(Error::Decode("noncanonical root request"));
     }

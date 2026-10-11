@@ -2,7 +2,7 @@
 //!
 //! `cpsd` is a thin facade over docknetwork's
 //! [`crypto`](https://github.com/docknetwork/crypto) crates (`bbs_plus`,
-//! `proof_system`, `bulletproofs_plus_plus`) for the `cvld` passport:
+//! `schnorr_pok`, `bulletproofs_plus_plus`) for the `cvld` passport:
 //!
 //! - **Blind issuance.** The holder commits to a random secret
 //!   ([`HolderSecret`]) and proves knowledge of it ([`request_issue`]); the
@@ -37,6 +37,7 @@ mod issuer;
 mod opaque_holder;
 mod params;
 mod presentation;
+mod proof;
 mod proof_wire;
 mod root_board;
 mod session;
