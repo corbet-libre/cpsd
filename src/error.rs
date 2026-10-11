@@ -41,6 +41,10 @@ pub enum Error {
     NoPendingIssuance,
     /// The opaque holder has not installed a verified passport.
     PassportUnavailable,
+    /// No sealing key was bound when the opaque holder was constructed.
+    HolderSealingUnavailable,
+    /// Holder sealing, context authentication or restored identity failed.
+    InvalidSealedHolder,
     /// The (unblinded) passport signature does not verify.
     InvalidSignature,
     /// The passport's validity period ended before the request's time.
@@ -91,6 +95,8 @@ impl fmt::Display for Error {
             Error::IssuancePending => f.write_str("issuance already pending"),
             Error::NoPendingIssuance => f.write_str("no pending issuance"),
             Error::PassportUnavailable => f.write_str("passport unavailable"),
+            Error::HolderSealingUnavailable => f.write_str("holder sealing unavailable"),
+            Error::InvalidSealedHolder => f.write_str("invalid sealed holder"),
             Error::InvalidSignature => f.write_str("invalid passport signature"),
             Error::PassportExpired => f.write_str("passport expired"),
             Error::WrongEpoch => f.write_str("wrong policy epoch"),

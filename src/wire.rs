@@ -31,6 +31,8 @@ pub(crate) enum Kind {
     HolderSecret = 7,
     PresentationRequest = 8,
     Presentation = 9,
+    OpaqueHolder = 10,
+    SealedHolder = 11,
 }
 
 /// Encoder. The buffer is wiped on drop because some kinds contain secrets.
@@ -42,7 +44,11 @@ impl Writer {
     pub(crate) fn new(kind: Kind) -> Self {
         // Reserve generously so that secret bytes are not left behind in
         // reallocated (unwiped) buffers for the small secret-bearing kinds.
-        let mut buf = Zeroizing::new(Vec::with_capacity(16 * 1024));
+        Self::with_capacity(kind, 16 * 1024)
+    }
+
+    pub(crate) fn with_capacity(kind: Kind, capacity: usize) -> Self {
+        let mut buf = Zeroizing::new(Vec::with_capacity(capacity));
         buf.extend_from_slice(MAGIC);
         buf.push(FORMAT_VERSION);
         buf.push(kind as u8);

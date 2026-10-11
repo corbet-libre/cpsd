@@ -171,3 +171,26 @@ community bytes `community-a`. Its canonical compressed pseudonym hex is:
 Native and actual browser tests assert this same fixed value before performing
 fresh issuance. The test request uses the existing shared-epoch expiry profile
 and the authenticated request's required exclusive COSE expiry (`now + 1`).
+
+## Original v2 holder sealing
+
+`from_seed_and_sealing_key` consumes and wipes the independently derived holder
+seed and sealing key. The wallet context and original
+`cpsd.opaque-holder.v1\0` AAD remain immutable. `seal` uses maintained
+XChaCha20-Poly1305 with fresh caller-supplied randomness; `restored` returns a
+separate nonexporting candidate after original identity, pending-opening and
+passport-signature checks. Neither method grants durability or currentness.
+Wallet must adopt the candidate only after its original matching Store receipt.
+The original `from_seed` constructor remains unbound and refuses sealing.
+
+The non-root aggregate and ciphertext containers retain original format2 kinds
+10 and11, with the unchanged v2 secret/pending/passport codecs. All existing
+main proof and presentation formats remain unchanged. Authenticated extended
+v3/kind12 root-board state is unsupported and refused intact; it is never stripped
+or resealed as a non-root holder. Such retained data needs an explicit original
+owner migration before this v2-only reader can be used. No migration is supplied.
+
+Original real issuance, pending/installed restart and renewal tests, maintained
+AEAD substitution/bounds tests, and authenticated unsupported-state refusal are
+authored. This tranche has source/format review only; Cargo/native/browser tests
+have not executed and no complete custody readiness is claimed.

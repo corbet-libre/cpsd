@@ -142,6 +142,10 @@ pub struct PendingIssuance {
 }
 
 impl PendingIssuance {
+    pub(crate) fn belongs_to(&self, secret: &HolderSecret) -> bool {
+        self.secret.0 == secret.0
+    }
+
     /// Unblinds the issuer's answer and checks the signature over the holder
     /// secret and the signed attributes. Returns the passport.
     pub fn finish(self, blind: &BlindPassport) -> Result<Passport, Error> {

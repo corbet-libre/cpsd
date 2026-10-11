@@ -57,7 +57,7 @@ pub use ids::{CommunityId, GateId, KeyId, MAX_COMMUNITY_ID_LEN, MAX_ID_LEN};
 pub use issuer::{
     BlindPassport, IssuanceChallenge, IssuanceRequest, IssuerKey, IssuerPublicKey, IssuerTag,
 };
-pub use opaque_holder::OpaqueHolder;
+pub use opaque_holder::{OpaqueHolder, SealedHolder};
 pub use presentation::{Presentation, PresentationRequest, Pseudonym, present, verify};
 
 pub use session::{Verifier, issuance_challenge, issue_blind_once};

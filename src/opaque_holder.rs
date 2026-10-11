@@ -9,6 +9,9 @@ use crate::{
 use rand_chacha::ChaCha20Rng;
 use zeroize::Zeroize;
 
+mod sealing;
+pub use sealing::SealedHolder;
+
 /// Nonexporting deterministic holder and its current issuance state.
 ///
 /// Wallet retains this engine and lends access through current authorization.
@@ -37,6 +40,7 @@ pub struct OpaqueHolder {
     secret: HolderSecret,
     pending: Option<PendingIssuance>,
     passport: Option<Passport>,
+    sealing: Option<std::sync::Arc<sealing::HolderSeal>>,
 }
 
 impl OpaqueHolder {
@@ -54,6 +58,7 @@ impl OpaqueHolder {
             secret: HolderSecret::generate(&mut rng),
             pending: None,
             passport: None,
+            sealing: None,
         }
     }
 
