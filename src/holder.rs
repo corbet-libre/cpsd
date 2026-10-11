@@ -142,6 +142,22 @@ pub struct PendingIssuance {
 }
 
 impl PendingIssuance {
+    pub(crate) fn from_opening(
+        secret: &HolderSecret,
+        blinding: Fr,
+        issuer: &IssuerPublicKey,
+    ) -> Self {
+        Self {
+            secret: secret.clone(),
+            blinding,
+            issuer: issuer.clone(),
+        }
+    }
+
+    pub(crate) fn issuer(&self) -> &IssuerPublicKey {
+        &self.issuer
+    }
+
     pub(crate) fn belongs_to(&self, secret: &HolderSecret) -> bool {
         self.secret.0 == secret.0
     }

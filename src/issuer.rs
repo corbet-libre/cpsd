@@ -244,6 +244,20 @@ impl IssuerKey {
         attributes.validate(&self.public.gates)?;
         request.verify(rng, &self.public, challenge)?;
 
+        self.issue_commitment(rng, &request.commitment, attributes)
+    }
+
+    // Only verified original issuance paths may call this private signing step.
+    pub(crate) fn issue_commitment<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        commitment: &G1Affine,
+        attributes: &PassportAttributes,
+    ) -> Result<BlindPassport, Error> {
+        if commitment.is_zero() {
+            return Err(Error::InvalidIssuanceRequest);
+        }
+        attributes.validate(&self.public.gates)?;
         let revocation = nonzero_scalar(rng);
         let mut known = BTreeMap::new();
         known.insert(IDX_KEY_ID, params::key_id_scalar(&self.public.key_id));
@@ -257,7 +271,7 @@ impl IssuerKey {
         debug_assert!(!known.contains_key(&IDX_SECRET));
         let signature = SignatureG1::<Curve>::new_with_committed_messages(
             rng,
-            &request.commitment,
+            commitment,
             known.iter().map(|(i, m)| (*i, m)).collect(),
             &self.secret,
             &self.public.params,
