@@ -14,19 +14,22 @@ const EXPIRY: Timestamp = 2_000_000;
 const NOW: Timestamp = 1_000;
 
 #[test]
-fn root_v3_request_framing_is_exact_and_does_not_upgrade_normal_v2() {
+fn root_and_ordinary_requests_share_canonical_v3_and_reject_v2() {
     let mut rng = rng();
     let root_key = root_issuer(&mut rng, "root-board-wire");
     let root = descriptor(&root_key, 3);
     let source =
         PresentationRequest::for_epoch(&mut rng, community(), 7, [gate()], NOW, EXPIRY).unwrap();
     let ordinary = source.to_bytes();
-    assert_eq!(&ordinary[..6], b"cpsd\x02\x08");
+    assert_eq!(&ordinary[..6], b"cpsd\x03\x08");
     let nested = root_board::request_bytes(&source);
     assert_eq!(&nested[..6], b"cpsd\x03\x08");
-    assert_eq!(&ordinary[6..], &nested[6..]);
-    assert!(PresentationRequest::from_bytes(&nested).is_err());
-    assert!(root_board::request_from_bytes(&ordinary).is_err());
+    assert_eq!(ordinary, nested);
+    assert!(PresentationRequest::from_bytes(&nested).unwrap() == source);
+    let mut legacy = ordinary.clone();
+    legacy[4] = 2;
+    assert!(PresentationRequest::from_bytes(&legacy).is_err());
+    assert!(root_board::request_from_bytes(&legacy).is_err());
     assert!(root_board::request_from_bytes(&nested).unwrap() == source);
 
     let context = RootBoardIssuanceContext::new(&mut rng, source, root.clone()).unwrap();
@@ -52,15 +55,27 @@ fn root_v3_request_framing_is_exact_and_does_not_upgrade_normal_v2() {
     let signed_root = root_signer
         .sign(csgn::Kind::Credential, &bytes, 0, NOW + 1)
         .unwrap();
-    let legacy_source = source_signer
+    let signed_source = source_signer
         .sign(csgn::Kind::Credential, &nested, 0, NOW + 1)
+        .unwrap();
+    assert!(
+        expected_source.authenticate(&signed_source, NOW).unwrap() == *context.source_request()
+    );
+    assert!(
+        expected_root
+            .authenticate_root_board_issuance(&signed_root, &expected_source, &signed_source, NOW,)
+            .unwrap()
+            == context
+    );
+
+    let legacy_source = source_signer
+        .sign(csgn::Kind::Credential, &legacy, 0, NOW + 1)
         .unwrap();
     assert!(expected_source.authenticate(&legacy_source, NOW).is_err());
     assert!(
         expected_root
-            .authenticate_root_board_issuance(&signed_root, &expected_source, &legacy_source, NOW,)
-            .unwrap()
-            == context
+            .authenticate_root_board_issuance(&signed_root, &expected_source, &legacy_source, NOW)
+            .is_err()
     );
 
     let mut old_nested = bytes.clone();

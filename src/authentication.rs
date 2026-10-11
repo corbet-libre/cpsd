@@ -70,9 +70,9 @@ impl AuthenticatedCommunity {
         Ok(context)
     }
 
-    // Old root contexts embed v3 requests; the current source owner may sign
-    // its unchanged v2 request. Both are accepted only inside this authenticated
-    // complete root context, then compared as the exact original typed request.
+    // Accept only the original canonical v3 request inside this authenticated
+    // complete root context, then compare the exact original typed request.
+    // The ordinary request decoder also refuses legacy v2 framing.
     fn authenticate_root_source(
         &self,
         cose: &[u8],
