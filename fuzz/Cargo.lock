@@ -683,6 +683,7 @@ dependencies = [
  "js-sys",
  "proof_system",
  "rand_chacha",
+ "schnorr_pok",
  "wasm-bindgen",
  "zeroize",
 ]

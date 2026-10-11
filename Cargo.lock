@@ -817,6 +817,7 @@ dependencies = [
  "proof_system",
  "rand 0.8.8",
  "rand_chacha",
+ "schnorr_pok",
  "tempfile",
  "tokio",
  "wasm-bindgen",
