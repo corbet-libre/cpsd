@@ -88,11 +88,17 @@ fn root_and_ordinary_requests_share_canonical_v3_and_reject_v2() {
     let holder = HolderSecret::generate(&mut rng);
     let global = key(&mut rng, "ordinary-v2");
     let challenge = IssuanceChallenge::generate(&mut rng);
-    let (issuance, _) = request_issue(&mut rng, &holder, global.public_key(), &challenge).unwrap();
+    let (issuance, pending) =
+        request_issue(&mut rng, &holder, global.public_key(), &challenge).unwrap();
     let mut issuance_wire = issuance.to_bytes();
-    assert_eq!(issuance_wire[4], 2);
-    issuance_wire[4] = 3;
+    assert_eq!(issuance_wire[4], 3);
+    issuance_wire[4] = 2;
     assert!(IssuanceRequest::from_bytes(&issuance_wire).is_err());
+    let mut pending_wire = pending.to_bytes();
+    assert_eq!(pending_wire[4], 2);
+    assert!(PendingIssuance::from_bytes(&pending_wire).is_ok());
+    pending_wire[4] = 3;
+    assert!(PendingIssuance::from_bytes(&pending_wire).is_err());
 }
 
 fn root_gate() -> GateId {
