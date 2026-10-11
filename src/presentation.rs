@@ -48,7 +48,7 @@ impl Pseudonym {
         Self(point_bytes(&p))
     }
 
-    fn point(&self) -> Result<G1Affine, Error> {
+    pub(crate) fn point(&self) -> Result<G1Affine, Error> {
         decode_point(&self.0)
     }
 

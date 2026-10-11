@@ -186,11 +186,22 @@ The original `from_seed` constructor remains unbound and refuses sealing.
 The non-root aggregate and ciphertext containers retain original format2 kinds
 10 and11, with the unchanged v2 secret/pending/passport codecs. All existing
 main proof and presentation formats remain unchanged. Authenticated extended
-v3/kind12 root-board state is unsupported and refused intact; it is never stripped
-or resealed as a non-root holder. Such retained data needs an explicit original
-owner migration before this v2-only reader can be used. No migration is supplied.
+v3/kind12 root-board state uses the original separate root-board owner codec. Its
+credential and pending opening must match the same hidden holder; malformed or
+foreign state refuses intact and is never stripped or resealed as a non-root holder.
 
-Original real issuance, pending/installed restart and renewal tests, maintained
-AEAD substitution/bounds tests, and authenticated unsupported-state refusal are
-authored. This tranche has source/format review only; Cargo/native/browser tests
-have not executed and no complete custody readiness is claimed.
+Root-board descriptors, issuance contexts, proofs and joint presentation retain
+their original v3 kinds and Dock protocols. Nested presentation requests use the
+private original v3 framing; the normal exported request/proof codecs remain v2.
+Root authentication may read the original source's signed v3 request inside the
+complete authenticated root context, without changing ordinary v2 authentication.
+Source role authorization and atomic nonce consumption remain duties of the
+original service before signature release. This library supplies no admin role.
+
+The original root-board crypto, sealing, replay and hostile-composition tests are
+ported, with explicit cross-version codec regressions. They are authored; native
+and browser execution of this additive root-board stage remains unqualified.
+
+The preceding v2 baseline passed native Clippy, 75 Rust tests and six compile-fail
+doctests. The additive root-board stage still has source/format checks only; its
+native/browser tests have not executed and complete custody readiness is not claimed.

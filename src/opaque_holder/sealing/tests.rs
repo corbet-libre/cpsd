@@ -44,7 +44,7 @@ fn encrypted(holder: &OpaqueHolder, plaintext: &[u8]) -> SealedHolder {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
-fn authenticated_extended_state_refuses_without_replacing_the_original_holder() {
+fn authenticated_malformed_root_state_refuses_without_replacing_the_original_holder() {
     let holder = holder(7);
     let original = holder.issuer_tag();
     let mut writer = Writer::new(Kind::OpaqueHolder);
@@ -53,11 +53,11 @@ fn authenticated_extended_state_refuses_without_replacing_the_original_holder() 
     writer.bytes(&[]);
     let mut plaintext = writer.finish_secret();
     // The original extended owner declares format3/kind12 and an additional
-    // root-board state field. Its contents are deliberately opaque here: this
-    // v2 owner has no authority to interpret, migrate or discard that state.
+    // root-board state field. Authentication alone cannot make its deliberately
+    // malformed contents a valid original root credential or pending opening.
     plaintext[4] = 3;
     plaintext[5] = 12;
-    let root_state = b"retained unsupported root-board state";
+    let root_state = b"retained malformed root-board state";
     plaintext.extend_from_slice(&(root_state.len() as u32).to_be_bytes());
     plaintext.extend_from_slice(root_state);
     let extended = encrypted(&holder, &plaintext);

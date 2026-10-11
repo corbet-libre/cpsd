@@ -45,6 +45,8 @@ pub enum Error {
     HolderSealingUnavailable,
     /// Holder sealing, context authentication or restored identity failed.
     InvalidSealedHolder,
+    /// Root-board purpose, cohort, context, state or equality check failed.
+    InvalidRootBoard,
     /// The (unblinded) passport signature does not verify.
     InvalidSignature,
     /// The passport's validity period ended before the request's time.
@@ -97,6 +99,7 @@ impl fmt::Display for Error {
             Error::PassportUnavailable => f.write_str("passport unavailable"),
             Error::HolderSealingUnavailable => f.write_str("holder sealing unavailable"),
             Error::InvalidSealedHolder => f.write_str("invalid sealed holder"),
+            Error::InvalidRootBoard => f.write_str("invalid root-board credential"),
             Error::InvalidSignature => f.write_str("invalid passport signature"),
             Error::PassportExpired => f.write_str("passport expired"),
             Error::WrongEpoch => f.write_str("wrong policy epoch"),

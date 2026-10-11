@@ -1883,3 +1883,6 @@ async fn lost_issuance_consumption_fails_closed() {
     );
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+#[path = "root_board/tests.rs"]
+mod root_board;

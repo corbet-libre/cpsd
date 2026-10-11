@@ -1,6 +1,7 @@
 //! Private holder encoding and maintained AEAD; no storage or key derivation.
 use super::OpaqueHolder;
 use crate::rand::{CryptoRng, RngCore};
+use crate::root_board::state::RootBoardState;
 use crate::wire::{Kind, MAX_ENCODED_LEN, Reader, Writer};
 use crate::{Error, HolderSecret, Passport, PendingIssuance};
 use chacha20poly1305::{
@@ -99,16 +100,35 @@ impl OpaqueHolder {
         let passport = self.passport.as_ref().map(Passport::to_bytes);
         let pending = pending.as_deref().map(Vec::as_slice).unwrap_or_default();
         let passport = passport.as_deref().map(Vec::as_slice).unwrap_or_default();
-        let length = 6 + 12 + secret.len() + pending.len() + passport.len();
+        // Without root-board state the original kind-10 plaintext stays
+        // byte-identical, so older readers and stored blobs keep working. Any
+        // root-board state selects the explicit extended kind under the same
+        // immutable key and context; no reader guesses a format.
+        let root = (!self.root_board.is_empty()).then(|| self.root_board.to_bytes());
+        let root = root.as_deref().map(Vec::as_slice);
+        let length = 6
+            + 12
+            + secret.len()
+            + pending.len()
+            + passport.len()
+            + root.map_or(0, |root| 4 + root.len());
         if length > MAX_ENCODED_LEN - 50 {
             return Err(Error::InvalidSealedHolder);
         }
-        // The original non-root aggregate and all nested owner codecs remain v2.
-        // Allocate exactly once so secret bytes do not survive reallocation.
-        let mut writer = Writer::with_capacity(Kind::OpaqueHolder, length);
+        // Allocate once at its exact final size; secret bytes never survive a
+        // Vec reallocation. Each original codec and this aggregate wipe on drop.
+        let kind = if root.is_some() {
+            Kind::OpaqueHolderWithRootBoard
+        } else {
+            Kind::OpaqueHolder
+        };
+        let mut writer = Writer::with_capacity(kind, length);
         writer.bytes(&secret);
         writer.bytes(pending);
         writer.bytes(passport);
+        if let Some(root) = root {
+            writer.bytes(root);
+        }
         let plaintext = writer.finish_secret();
         let mut nonce = [0; 24];
         rng.fill_bytes(&mut nonce);
@@ -150,12 +170,23 @@ impl OpaqueHolder {
                 )
                 .map_err(|_| Error::InvalidSealedHolder)?,
         );
-        // This owner implements only the original non-root v2 codec. An
-        // authenticated extended/root-board frame is refused, never stripped.
-        let mut reader = Reader::new(&plaintext, Kind::OpaqueHolder)?;
+        // The explicit kind byte selects the declared codec; anything else is
+        // handed to the original reader, which rejects unknown kinds.
+        let extended = plaintext.get(5) == Some(&(Kind::OpaqueHolderWithRootBoard as u8));
+        let kind = if extended {
+            Kind::OpaqueHolderWithRootBoard
+        } else {
+            Kind::OpaqueHolder
+        };
+        let mut reader = Reader::new(&plaintext, kind)?;
         let secret = HolderSecret::from_bytes(reader.bytes()?)?;
         let pending = reader.bytes()?;
         let passport = reader.bytes()?;
+        let root = if extended {
+            Some(reader.bytes()?)
+        } else {
+            None
+        };
         reader.finish()?;
         let pending = (!pending.is_empty())
             .then(|| PendingIssuance::from_bytes(pending))
@@ -163,6 +194,10 @@ impl OpaqueHolder {
         let passport = (!passport.is_empty())
             .then(|| Passport::from_bytes(passport))
             .transpose()?;
+        let root_board = match root {
+            Some(root) => RootBoardState::from_bytes(root, &secret)?,
+            None => RootBoardState::default(),
+        };
         if secret.0 != self.secret.0
             || pending
                 .as_ref()
@@ -177,6 +212,7 @@ impl OpaqueHolder {
             secret,
             pending,
             passport,
+            root_board,
             sealing: Some(Arc::clone(sealing)),
         })
     }
