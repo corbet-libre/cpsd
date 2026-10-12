@@ -331,6 +331,25 @@ pub async fn issuance_challenge<R: RngCore + CryptoRng, S: ChallengeStore>(
     Ok(nonce)
 }
 
+/// Withdraw an outstanding issuance challenge so a retry can replace it. Returns
+/// whether a live challenge for exactly this issuer, person and session was
+/// removed; a foreign, expired or already consumed challenge removes nothing.
+pub async fn revoke_issuance_challenge<S: ChallengeStore>(
+    store: &S,
+    issuer: &IssuerPublicKey,
+    authenticated: &AuthenticatedIssuance,
+    challenge: &IssuanceChallenge,
+    now: Timestamp,
+) -> Result<bool, Error> {
+    store
+        .consume(
+            challenge.to_bytes(),
+            issuance_binding(issuer, authenticated),
+            now,
+        )
+        .await
+}
+
 fn issuance_binding(issuer: &IssuerPublicKey, authenticated: &AuthenticatedIssuance) -> [u8; 32] {
     binding(
         b"cpsd/v2/issuance-slot",

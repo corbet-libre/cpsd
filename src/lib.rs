@@ -70,6 +70,7 @@ pub use root_board::{
 };
 pub use session::{
     ConsumedRootBoardIssuance, Verifier, consume_root_board_issuance, issuance_challenge,
-    issue_blind_once, register_root_board_issuance, verify_stored_root_board_issuance,
+    issue_blind_once, register_root_board_issuance, revoke_issuance_challenge,
+    verify_stored_root_board_issuance,
 };
 pub use storage::{ChallengeRecord, ChallengeStore, IssuanceStore, MemoryStore, VerifiedIssuance};

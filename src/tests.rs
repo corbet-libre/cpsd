@@ -1815,6 +1815,44 @@ async fn issuance_challenge_request_collisions_are_conflicts() {
 }
 
 #[tokio::test]
+async fn a_revoked_issuance_challenge_is_gone_and_foreign_ones_are_untouched() {
+    let mut rng = rng();
+    let store = MemoryStore::new(community(), 10).unwrap();
+    let issuer = key(&mut rng, "revoke");
+    let auth = AuthenticatedIssuance::new([1; 32], [2; 32]);
+    let other = AuthenticatedIssuance::new([1; 32], [3; 32]);
+    let challenge = issuance_challenge(&mut rng, &store, issuer.public_key(), &auth, 200)
+        .await
+        .unwrap();
+    // Another session, a later time and a foreign challenge remove nothing.
+    assert_eq!(
+        revoke_issuance_challenge(&store, issuer.public_key(), &other, &challenge, 100).await,
+        Ok(false)
+    );
+    assert_eq!(
+        revoke_issuance_challenge(&store, issuer.public_key(), &auth, &challenge, 201).await,
+        Ok(false)
+    );
+    let unknown = IssuanceChallenge::generate(&mut rng);
+    assert_eq!(
+        revoke_issuance_challenge(&store, issuer.public_key(), &auth, &unknown, 100).await,
+        Ok(false)
+    );
+    assert_eq!(
+        revoke_issuance_challenge(&store, issuer.public_key(), &auth, &challenge, 100).await,
+        Ok(true)
+    );
+    assert_eq!(
+        revoke_issuance_challenge(&store, issuer.public_key(), &auth, &challenge, 100).await,
+        Ok(false)
+    );
+    // The slot is free again for a replacement.
+    issuance_challenge(&mut rng, &store, issuer.public_key(), &auth, 200)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn unreserved_issuance_challenge_is_invalid() {
     let mut rng = rng();
     let store = MemoryStore::new(community(), 10).unwrap();
