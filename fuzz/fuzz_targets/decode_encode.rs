@@ -25,4 +25,10 @@ fuzz_target!(|data: &[u8]| {
     identity!(PresentationRequest::from_bytes, to_bytes);
     identity!(Presentation::from_bytes, to_bytes);
     identity!(Pseudonym::from_bytes, to_bytes);
+    identity!(RootBoardPublicKey::from_bytes, to_bytes);
+    identity!(RootBoardIssuanceContext::from_bytes, to_bytes);
+    identity!(RootBoardIssuanceRequest::from_bytes, to_bytes);
+    identity!(BlindRootBoardCredential::from_bytes, to_bytes);
+    identity!(RootBoardRequest::from_bytes, to_bytes);
+    identity!(RootBoardPresentation::from_bytes, to_bytes);
 });

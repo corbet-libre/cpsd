@@ -1,3 +1,4 @@
+mod refusal_paths;
 mod proof_migration;
 
 use crate::test_support::TestPresentation;
