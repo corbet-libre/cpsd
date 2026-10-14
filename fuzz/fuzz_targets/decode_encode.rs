@@ -35,8 +35,6 @@ fuzz_target!(|data: &[u8]| {
     identity!(StampIssuerKey::from_secret_bytes, to_secret_bytes);
     identity!(StampIssuanceRequest::from_bytes, to_bytes);
     identity!(BlindStamp::from_bytes, to_bytes);
-    identity!(PendingStamp::from_bytes, to_bytes);
-    identity!(Stamp::from_bytes, to_bytes);
     identity!(StampPresentation::from_bytes, to_bytes);
     if let Ok(tag) = IssuerTag::from_bytes(data) {
         assert_eq!(tag.to_bytes().as_slice(), data);

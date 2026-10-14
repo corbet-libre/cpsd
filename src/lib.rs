@@ -23,7 +23,7 @@
 //! - **Confirmation stamps.** A separate, short-lived blind credential under
 //!   its own issuer key ([`StampIssuerKey`]) that carries up to sixteen hidden
 //!   action digests and is presented one digest per community under the same
-//!   pseudonym ([`request_stamp`], [`Stamp::present`], [`verify_stamp`],
+//!   pseudonym ([`OpaqueHolder::begin_stamp`], [`OpaqueHolder::present_stamp`], [`verify_stamp`],
 //!   [`StampLedger`]); see `docs/STAMP-SECURITY.md`.
 //!
 //! Randomness is always supplied by the caller (`RngCore + CryptoRng`, the
@@ -81,10 +81,11 @@ pub use session::{
 };
 pub use stamp::{
     ActionKind, AuthenticatedStampIssuance, BlindStamp, CommunityFingerprint, MAX_ACTION_KIND_LEN,
-    MAX_STAMP_COHORT_SECONDS, MIN_STAMP_COHORT_SECONDS, PayloadDigest, PendingStamp, STAMP_SLOTS,
-    Stamp, StampAction, StampDigest, StampIssuanceRequest, StampIssuerKey, StampLedger,
-    StampPresentation, StampPublicKey, StampSalt, StampScope, VerifiedStamp, issue_stamp_once,
-    request_stamp, revoke_stamp_issuance_challenge, stamp_issuance_challenge, verify_stamp,
+    MAX_STAMP_COHORT_SECONDS, MIN_STAMP_COHORT_SECONDS, PayloadDigest, STAMP_CLOCK_SKEW_SECONDS,
+    STAMP_PRUNE_MARGIN_SECONDS, STAMP_SLOTS, StampAction, StampDigest, StampIssuanceRequest,
+    StampIssuerKey, StampLedger, StampParams, StampPresentation, StampPublicKey, StampSalt,
+    StampScope, VerifiedStamp, issue_stamp_once, revoke_stamp_issuance_challenge,
+    stamp_issuance_challenge, verify_stamp,
 };
 pub use storage::{
     ChallengeRecord, ChallengeStore, IssuanceStore, MemoryStore, StampIssuanceStore,

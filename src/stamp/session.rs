@@ -4,8 +4,8 @@
 use ark_std::rand::{CryptoRng, RngCore};
 
 use super::{
-    BlindStamp, StampAction, StampIssuanceRequest, StampIssuerKey, StampPresentation,
-    StampPublicKey, StampScope, VerifiedStamp, verify_stamp,
+    BlindStamp, STAMP_PRUNE_MARGIN_SECONDS, StampAction, StampIssuanceRequest, StampIssuerKey,
+    StampParams, StampPresentation, StampPublicKey, StampScope, VerifiedStamp, verify_stamp,
 };
 use crate::{
     ChallengeRecord, ChallengeStore, CommunityFingerprint, Error, IssuanceChallenge, IssuerTag,
@@ -21,25 +21,39 @@ use crate::{
 /// passport issuer's tag store holds for that member. Never built from
 /// device input.
 ///
-/// The wallet obtains one fresh user verification of `member` whose WebAuthn
-/// challenge is [`StampIssuanceRequest::confirmation_challenge`] before it
-/// calls [`issue_stamp_once`]; this crate does not see WebAuthn. The wallet
-/// also rate-limits stamps per member and period (rulebook setting).
+/// Before [`issue_stamp_once`], the wallet verifies one fresh user
+/// verification of `member` and records the WebAuthn challenge it covered with
+/// [`with_user_verification`](Self::with_user_verification); issuance refuses
+/// unless that challenge is the request's
+/// [`StampIssuanceRequest::confirmation_challenge`]. This crate does not see
+/// WebAuthn. The wallet also rate-limits stamps per member and period
+/// (rulebook setting).
 #[derive(Clone)]
 pub struct AuthenticatedStampIssuance {
     member: [u8; 32],
     session: [u8; 32],
     tag: IssuerTag,
+    confirmation: Option<[u8; 32]>,
 }
 
 impl AuthenticatedStampIssuance {
     /// Imports the wallet's authenticated member, session and passport tag.
+    /// Enough to reserve a nonce; issuance also needs the user verification.
     pub fn new(member: [u8; 32], session: [u8; 32], passport_tag: IssuerTag) -> Self {
         Self {
             member,
             session,
             tag: passport_tag,
+            confirmation: None,
         }
+    }
+
+    /// Records the challenge of the WebAuthn assertion with user verification
+    /// that the wallet verified for this member. Pass only the challenge
+    /// taken from a verified assertion, never a value the device supplied.
+    pub fn with_user_verification(mut self, verified_challenge: [u8; 32]) -> Self {
+        self.confirmation = Some(verified_challenge);
+        self
     }
 }
 
@@ -106,7 +120,9 @@ pub async fn revoke_stamp_issuance_challenge<S: ChallengeStore>(
 /// Signs at most one stamp for a stored issuance nonce.
 ///
 /// Requires the request's tag to equal the authenticated member's passport tag
-/// ([`Error::IssuerTagMismatch`] otherwise), verifies the request's proof
+/// ([`Error::IssuerTagMismatch`] otherwise) and the verified user verification
+/// to cover exactly this request and nonce ([`Error::UnconfirmedStampRequest`]
+/// otherwise), verifies the request's proof
 /// (so the committed secret is the passport's secret), signs `epoch` and the
 /// key's cohort expiry for `now`, and then consumes the nonce together with the
 /// stamp tag registry ([`StampIssuanceStore`]) in one transaction before
@@ -132,6 +148,10 @@ pub async fn issue_stamp_once<R: RngCore + CryptoRng, S: StampIssuanceStore>(
     ensure(
         request.issuer_tag() == authenticated.tag,
         Error::IssuerTagMismatch,
+    )?;
+    ensure(
+        authenticated.confirmation == Some(request.confirmation_challenge(challenge)),
+        Error::UnconfirmedStampRequest,
     )?;
     let blind = issuer.issue_blind(rng, request, challenge, epoch, now)?;
     let consumed = store
@@ -159,25 +179,33 @@ pub struct StampLedger<S> {
     store: S,
     fingerprint: CommunityFingerprint,
     keys: Vec<StampPublicKey>,
+    params: StampParams,
 }
 
 impl<S: ChallengeStore> StampLedger<S> {
-    /// A ledger for the store's community, its pinned fingerprint and the
-    /// authenticated stamp key ring.
+    /// A ledger for the store's community, its pinned fingerprint, the
+    /// authenticated stamp key ring and the rulebook's stamp settings. A key
+    /// whose cohort differs from `params` is refused ([`Error::WrongExpiryCohort`]).
     pub fn new(
         store: S,
         fingerprint: CommunityFingerprint,
         keys: Vec<StampPublicKey>,
+        params: StampParams,
     ) -> Result<Self, Error> {
         let mut ids = std::collections::BTreeSet::new();
         ensure(
             keys.iter().all(|key| ids.insert(key.key_id().clone())),
             Error::DuplicateKeyId,
         )?;
+        ensure(
+            keys.iter().all(|key| key.params() == params),
+            Error::WrongExpiryCohort,
+        )?;
         Ok(Self {
             store,
             fingerprint,
             keys,
+            params,
         })
     }
 
@@ -196,7 +224,15 @@ impl<S: ChallengeStore> StampLedger<S> {
         epoch: u64,
         now: Timestamp,
     ) -> Result<VerifiedStamp, Error> {
-        let verified = verify_stamp(&self.keys, &self.scope(), epoch, action, presentation, now)?;
+        let verified = verify_stamp(
+            &self.keys,
+            &self.params,
+            &self.scope(),
+            epoch,
+            action,
+            presentation,
+            now,
+        )?;
         self.record(&verified, now).await?;
         Ok(verified)
     }
@@ -236,9 +272,18 @@ impl<S: ChallengeStore> StampLedger<S> {
             .await
     }
 
-    /// Deletes records whose stamps expired before `now`.
+    /// Deletes records whose stamps expired more than
+    /// [`STAMP_PRUNE_MARGIN_SECONDS`] before `now`. The margin keeps a record
+    /// alive while a node with a clock up to that far behind (or a clock that
+    /// stepped back) could still accept its stamp; pruning at `now` itself
+    /// would let such a node apply the same action again. The underlying
+    /// store prunes all of its expired records with the same margin.
     pub async fn prune(&self, now: Timestamp) -> Result<u64, Error> {
-        self.store.prune(now).await
+        check_timestamp(now)?;
+        match now.checked_sub(STAMP_PRUNE_MARGIN_SECONDS) {
+            Some(cutoff) if cutoff > 0 => self.store.prune(cutoff).await,
+            _ => Ok(0),
+        }
     }
 }
 

@@ -11,8 +11,9 @@ use cpsd::{
 use crlt::{Config, Db, Migration};
 use rand::{SeedableRng, rngs::StdRng};
 
-const NOW: Timestamp = 1_000_200;
-const EXPIRES: Timestamp = 1_000_800;
+/// 200 s into hour cohort 1000; the stamp expires at the end of cohort 1001.
+const NOW: Timestamp = 3_600_200;
+const EXPIRES: Timestamp = 3_607_200;
 const EPOCH: u64 = 2;
 
 fn scope(name: &str) -> CommunityId {
@@ -45,54 +46,85 @@ async fn database(migrations: &[Migration<'_>]) -> (tempfile::TempDir, Db, Strin
     (dir, db, url)
 }
 
+fn params() -> StampParams {
+    StampParams::new(3_600).unwrap()
+}
+
 fn stamp_key(rng: &mut StdRng) -> StampIssuerKey {
-    StampIssuerKey::generate(rng, KeyId::new("stamp").unwrap(), 600).unwrap()
+    StampIssuerKey::generate(rng, KeyId::new("stamp").unwrap(), &params()).unwrap()
+}
+
+fn holder(seed: u8) -> OpaqueHolder {
+    OpaqueHolder::from_seed(&mut [seed; 32])
+}
+
+fn approval(n: u8) -> (StampScope, StampAction) {
+    (
+        StampScope::new(
+            scope(&format!("community-{n}")),
+            CommunityFingerprint::from_bytes([n; 32]),
+        ),
+        StampAction::new(
+            ActionKind::new("device.revoke").unwrap(),
+            PayloadDigest::from_bytes([n; 32]),
+            StampSalt::from_bytes([n; 32]),
+        ),
+    )
+}
+
+/// The wallet's context after it verified the user verification that covers
+/// exactly this request and nonce.
+fn confirmed(
+    auth: &AuthenticatedStampIssuance,
+    request: &StampIssuanceRequest,
+    nonce: &IssuanceChallenge,
+) -> AuthenticatedStampIssuance {
+    auth.clone()
+        .with_user_verification(request.confirmation_challenge(nonce))
 }
 
 async fn issue<S: StampIssuanceStore>(
     rng: &mut StdRng,
     store: &S,
     key: &StampIssuerKey,
-    secret: &HolderSecret,
+    holder: &mut OpaqueHolder,
     auth: &AuthenticatedStampIssuance,
 ) -> Result<BlindStamp, Error> {
     let nonce = stamp_issuance_challenge(rng, store, key.public_key(), auth, NOW + 100).await?;
-    let (request, _) = request_stamp(
-        rng,
-        secret,
-        key.public_key(),
-        &nonce,
-        &[StampDigest::from_bytes([9; 32])],
-    )?;
-    issue_stamp_once(rng, store, key, auth, &request, &nonce, EPOCH, NOW).await
+    holder.cancel_stamp();
+    let request = holder.begin_stamp(rng, key.public_key(), &nonce, &[approval(9)], NOW)?;
+    let auth = confirmed(auth, &request, &nonce);
+    issue_stamp_once(rng, store, key, &auth, &request, &nonce, EPOCH, NOW).await
 }
 
 async fn registry_contract(store: impl StampIssuanceStore) {
     let mut rng = StdRng::seed_from_u64(31);
     let key = stamp_key(&mut rng);
-    let alice = HolderSecret::generate(&mut rng);
-    let mallory = HolderSecret::generate(&mut rng);
-    let member = |id: u8, secret: &HolderSecret| {
-        AuthenticatedStampIssuance::new([id; 32], [id; 32], secret.issuer_tag())
+    let mut alice = holder(1);
+    let mut mallory = holder(2);
+    let member = |id: u8, holder: &OpaqueHolder| {
+        AuthenticatedStampIssuance::new([id; 32], [id; 32], holder.issuer_tag())
     };
     for _ in 0..2 {
-        issue(&mut rng, &store, &key, &alice, &member(1, &alice))
+        let auth = member(1, &alice);
+        issue(&mut rng, &store, &key, &mut alice, &auth)
             .await
             .unwrap();
     }
+    let auth = member(2, &alice);
     assert_eq!(
-        issue(&mut rng, &store, &key, &alice, &member(2, &alice))
-            .await
-            .err(),
+        issue(&mut rng, &store, &key, &mut alice, &auth).await.err(),
         Some(Error::IssuerTagClaimed)
     );
+    let auth = member(1, &mallory);
     assert_eq!(
-        issue(&mut rng, &store, &key, &mallory, &member(1, &mallory))
+        issue(&mut rng, &store, &key, &mut mallory, &auth)
             .await
             .err(),
         Some(Error::IssuerTagMismatch)
     );
-    issue(&mut rng, &store, &key, &mallory, &member(3, &mallory))
+    let auth = member(3, &mallory);
+    issue(&mut rng, &store, &key, &mut mallory, &auth)
         .await
         .unwrap();
 }
@@ -114,18 +146,21 @@ async fn stamp_and_passport_registries_share_a_database_without_interfering() {
     let mut rng = StdRng::seed_from_u64(32);
     let key = stamp_key(&mut rng);
     let passport = IssuerKey::generate(&mut rng, KeyId::new("passport").unwrap(), vec![]).unwrap();
-    let alice = HolderSecret::generate(&mut rng);
+    let mut alice = holder(1);
     // Stamps register member 1 -> alice's tag.
     let auth = AuthenticatedStampIssuance::new([1; 32], [1; 32], alice.issuer_tag());
-    issue(&mut rng, &store, &key, &alice, &auth).await.unwrap();
+    issue(&mut rng, &store, &key, &mut alice, &auth)
+        .await
+        .unwrap();
     // The passport registry still lets person 2 register alice's tag: the
     // stamp registry never blocks or registers passport tags.
     let person = AuthenticatedIssuance::new([2; 32], [2; 32]);
     let nonce = issuance_challenge(&mut rng, &store, passport.public_key(), &person, NOW)
         .await
         .unwrap();
-    let (request, pending) =
-        request_issue(&mut rng, &alice, passport.public_key(), &nonce).unwrap();
+    let request = alice
+        .begin_issuance(&mut rng, passport.public_key(), &nonce)
+        .unwrap();
     let blind = issue_blind_once(
         &mut rng,
         &store,
@@ -138,9 +173,11 @@ async fn stamp_and_passport_registries_share_a_database_without_interfering() {
     )
     .await
     .unwrap();
-    pending.finish(&blind).unwrap();
+    alice.finish_issuance(&blind).unwrap();
     // And the stamp registry is unchanged by that passport registration.
-    issue(&mut rng, &store, &key, &alice, &auth).await.unwrap();
+    issue(&mut rng, &store, &key, &mut alice, &auth)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -149,19 +186,15 @@ async fn missing_stamp_registry_fails_closed_and_keeps_the_nonce() {
     let store = LibsqlStore::new(&db, scope("wallet"), 10).unwrap();
     let mut rng = StdRng::seed_from_u64(33);
     let key = stamp_key(&mut rng);
-    let secret = HolderSecret::generate(&mut rng);
-    let auth = AuthenticatedStampIssuance::new([5; 32], [6; 32], secret.issuer_tag());
+    let mut holder = holder(5);
+    let auth = AuthenticatedStampIssuance::new([5; 32], [6; 32], holder.issuer_tag());
     let nonce = stamp_issuance_challenge(&mut rng, &store, key.public_key(), &auth, NOW)
         .await
         .unwrap();
-    let (request, pending) = request_stamp(
-        &mut rng,
-        &secret,
-        key.public_key(),
-        &nonce,
-        &[StampDigest::from_bytes([1; 32])],
-    )
-    .unwrap();
+    let request = holder
+        .begin_stamp(&mut rng, key.public_key(), &nonce, &[approval(1)], NOW)
+        .unwrap();
+    let auth = confirmed(&auth, &request, &nonce);
     macro_rules! once {
         () => {
             issue_stamp_once(&mut rng, &store, &key, &auth, &request, &nonce, EPOCH, NOW)
@@ -179,7 +212,8 @@ async fn missing_stamp_registry_fails_closed_and_keeps_the_nonce() {
     .await
     .unwrap();
     store.check_stamp_issuance_indexes().await.unwrap();
-    pending.finish(&once!().await.unwrap()).unwrap();
+    holder.finish_stamp(&once!().await.unwrap(), NOW).unwrap();
+    assert!(holder.stamp_covers(&approval(1).0, &approval(1).1, NOW));
     assert_eq!(once!().await.err(), Some(Error::InvalidChallenge));
 }
 
@@ -193,7 +227,7 @@ struct Presented {
 fn presented(seed: u64) -> Presented {
     let mut rng = StdRng::seed_from_u64(seed);
     let key = stamp_key(&mut rng);
-    let secret = HolderSecret::generate(&mut rng);
+    let mut holder = holder(seed as u8);
     let scope = StampScope::new(
         scope("community"),
         CommunityFingerprint::from_bytes([3; 32]),
@@ -203,15 +237,23 @@ fn presented(seed: u64) -> Presented {
         PayloadDigest::from_bytes([4; 32]),
         StampSalt::generate(&mut rng),
     );
-    let digest = action.digest(scope.fingerprint(), &secret.pseudonym(scope.community()));
     let nonce = IssuanceChallenge::generate(&mut rng);
-    let (request, pending) =
-        request_stamp(&mut rng, &secret, key.public_key(), &nonce, &[digest]).unwrap();
+    let request = holder
+        .begin_stamp(
+            &mut rng,
+            key.public_key(),
+            &nonce,
+            &[(scope.clone(), action.clone())],
+            NOW,
+        )
+        .unwrap();
     let blind = key
         .issue_blind(&mut rng, &request, &nonce, EPOCH, NOW)
         .unwrap();
-    let stamp = pending.finish(&blind).unwrap();
-    let presentation = stamp.present(&mut rng, &scope, &action).unwrap();
+    holder.finish_stamp(&blind, NOW).unwrap();
+    let presentation = holder
+        .present_stamp(&mut rng, &scope, &action, NOW)
+        .unwrap();
     Presented {
         key: key.public_key().clone(),
         scope,
@@ -230,6 +272,7 @@ async fn ledger_refuses_replays_across_pools_and_after_reopen() {
             LibsqlStore::new(db, scope("community"), 10).unwrap(),
             *p.scope.fingerprint(),
             vec![p.key.clone()],
+            params(),
         )
         .unwrap()
     };
@@ -263,8 +306,22 @@ async fn ledger_refuses_replays_across_pools_and_after_reopen() {
         .accept(&p.action, &p.presentation, EPOCH, NOW)
         .await
         .unwrap();
-    assert_eq!(reopened.prune(EXPIRES).await.unwrap(), 0);
-    assert_eq!(reopened.prune(EXPIRES + 1).await.unwrap(), 1);
+    // Records outlive their stamps by the prune margin, also in libSQL.
+    assert_eq!(reopened.prune(EXPIRES + 1).await.unwrap(), 0);
+    assert_eq!(
+        reopened
+            .prune(EXPIRES + STAMP_PRUNE_MARGIN_SECONDS)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        reopened
+            .prune(EXPIRES + STAMP_PRUNE_MARGIN_SECONDS + 1)
+            .await
+            .unwrap(),
+        1
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -283,6 +340,7 @@ async fn concurrent_records_of_one_digest_yield_exactly_one_success() {
                 LibsqlStore::new(&db, scope("community"), 10).unwrap(),
                 *p.scope.fingerprint(),
                 vec![p.key.clone()],
+                params(),
             )
             .unwrap();
             barrier.wait().await;
@@ -303,19 +361,15 @@ async fn concurrent_records_of_one_digest_yield_exactly_one_success() {
 async fn double_issuance_race<S: StampIssuanceStore + Clone + 'static>(a: S, b: S) {
     let mut rng = StdRng::seed_from_u64(36);
     let key = std::sync::Arc::new(stamp_key(&mut rng));
-    let secret = HolderSecret::generate(&mut rng);
-    let auth = AuthenticatedStampIssuance::new([8; 32], [8; 32], secret.issuer_tag());
+    let mut holder = holder(8);
+    let auth = AuthenticatedStampIssuance::new([8; 32], [8; 32], holder.issuer_tag());
     let nonce = stamp_issuance_challenge(&mut rng, &a, key.public_key(), &auth, NOW)
         .await
         .unwrap();
-    let (request, _) = request_stamp(
-        &mut rng,
-        &secret,
-        key.public_key(),
-        &nonce,
-        &[StampDigest::from_bytes([2; 32])],
-    )
-    .unwrap();
+    let request = holder
+        .begin_stamp(&mut rng, key.public_key(), &nonce, &[approval(2)], NOW)
+        .unwrap();
+    let auth = confirmed(&auth, &request, &nonce);
     let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
     let mut jobs = Vec::new();
     for (i, store) in [a, b].into_iter().enumerate() {

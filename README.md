@@ -47,23 +47,37 @@ A stamp is a second, short-lived blind credential for "one confirmation per
 device". It has its own key, generators, wire kinds (envelope version 4) and tag
 registry, and it never changes passport behaviour.
 
-1. The wallet holds a `StampIssuerKey` (cohort length = rulebook stamp
-   lifetime) and publishes its `StampPublicKey` in the stamp key ring.
-2. Per action, the device draws a `StampSalt` and computes the digest with
-   `StampAction::digest(fingerprint, pseudonym)`. It then calls `request_stamp`
-   with up to `STAMP_SLOTS` digests (random fillers, shuffled slots) against
-   the wallet's `stamp_issuance_challenge` nonce. One user verification signs
+1. The wallet takes the expiry cohort from its rulebook (`StampParams`: whole
+   hours that divide one day, one hour to one day; rulebook default one UTC
+   day), holds a `StampIssuerKey` generated under it and publishes its
+   `StampPublicKey` in the stamp key ring. A stamp expires at the end of the
+   cohort after its issuance (by default the end of the next UTC day).
+2. Per action, the device draws a `StampSalt` and builds a `StampAction`. It
+   calls `OpaqueHolder::begin_stamp` with up to `STAMP_SLOTS` (scope, action)
+   pairs against the wallet's `stamp_issuance_challenge` nonce; the holder
+   computes the digests with its own pseudonyms (random fillers, shuffled
+   slots). One user verification signs
    `StampIssuanceRequest::confirmation_challenge`.
-3. The wallet calls `issue_stamp_once` with an `AuthenticatedStampIssuance`
-   (member, session, the member's passport `IssuerTag`) and a store
-   implementing `StampIssuanceStore` (libSQL: `STAMP_ISSUANCE_SCHEMA`). The
-   device runs `PendingStamp::finish`.
-4. Per community, the device calls `Stamp::present(scope, action)`. The
-   community calls `StampLedger::accept`, which runs `verify_stamp` (pure,
-   offline, challenge = action digest) and then records the digest once.
+3. The wallet verifies that assertion, records its challenge with
+   `AuthenticatedStampIssuance::with_user_verification` and calls
+   `issue_stamp_once` with a store implementing `StampIssuanceStore` (libSQL:
+   `STAMP_ISSUANCE_SCHEMA`). The device runs `OpaqueHolder::finish_stamp`.
+4. Per community, the device calls `OpaqueHolder::present_stamp`. The
+   community calls `StampLedger::accept` (key ring plus its own
+   `StampParams`), which runs `verify_stamp` (pure, offline, challenge =
+   action digest) and then records the digest once.
 
-The security argument and its limits (no revocation, short lifetime) are in
-[STAMP-SECURITY.md](docs/STAMP-SECURITY.md).
+Custody: only `OpaqueHolder` touches stamps. No stamp function accepts or
+returns the holder secret, and the pending request and stamps it retains (and
+seals, so a restart loses no confirmation) never contain the secret.
+
+Capacity: one-use records share the community's `ChallengeStore` capacity with
+login challenges and live up to two cohorts plus one hour. Size the capacity
+for the expected login challenges plus up to one record per stamped action in
+that window; a full store refuses new login challenges until records expire.
+
+The security argument and its limits (no revocation, short lifetime, the
+expiry cohort as anonymity set) are in [STAMP-SECURITY.md](docs/STAMP-SECURITY.md).
 
 ## Dependency survey and choice
 
@@ -347,8 +361,8 @@ Line and branch coverage target 100%; failures remain blocking. See
 by `cwlt` Wallet. `ckmg` Keys derives the dedicated, purpose-separated seed.
 The dedicated holder seed is wiped after initialization. The engine retains its
 holder scalar, pending issuance opening and verified passport; it exposes only
-public issuance messages, signed attributes, issuer tags, pseudonyms and existing
-authenticated presentations. There are no secret, RNG, passport, Clone, Debug or
+public issuance messages, signed attributes, issuer tags, pseudonyms, existing
+authenticated presentations and confirmation stamp presentations. There are no secret, RNG, passport, Clone, Debug or
 serialization accessors. Wallet retains the engine and passport, and enforces
 a current authorized capability before lending each operation. Vault wires that
 capability; Keys does not retain the passport or perform presentations.

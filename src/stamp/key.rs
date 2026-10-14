@@ -20,21 +20,63 @@ use crate::{
     wire::{Kind, Reader, Writer},
 };
 
-/// Shortest accepted expiry cohort (one minute).
-pub const MIN_STAMP_COHORT_SECONDS: u64 = 60;
+/// Finest accepted expiry cohort: one hour. Nothing finer is ever accepted, by
+/// issuers, holders or verifiers: every stamp issued in one cohort shares its
+/// revealed expiry, so the cohort is the anonymity set of that value
+/// (`docs/STAMP-SECURITY.md`, section 4.4).
+pub const MIN_STAMP_COHORT_SECONDS: u64 = 60 * 60;
 
-/// Longest accepted expiry cohort (one day). Stamps have no revocation; a
-/// short cohort is what bounds a stolen or compromised stamp.
+/// Coarsest accepted expiry cohort: one UTC calendar day. Stamps have no
+/// revocation, and a stamp lives up to two cohorts.
 pub const MAX_STAMP_COHORT_SECONDS: u64 = 24 * 60 * 60;
+
+/// Clock tolerance between wallet, device and verifiers: the holder accepts a
+/// signed expiry this far outside its own issuance window, and verifiers accept
+/// a stamp issued this far in their future.
+pub const STAMP_CLOCK_SKEW_SECONDS: u64 = 5 * 60;
+
+/// How long a one-use record outlives its stamp before [`crate::StampLedger::prune`]
+/// deletes it. It must exceed the clock skew between nodes that share a ledger;
+/// otherwise a node whose clock is behind could accept a pruned digest again.
+pub const STAMP_PRUNE_MARGIN_SECONDS: u64 = 60 * 60;
+
+/// Stamp settings from the wallet's rulebook, taken by the wallet when it
+/// creates a stamp key and by every verifier.
+///
+/// The library holds no default: the rulebook does (one UTC calendar day,
+/// `86400`). The expiry cohort must be a whole number of hours that divides one
+/// day (1, 2, 3, 4, 6, 8, 12 or 24 hours), so cohorts align with UTC days and
+/// nothing finer than [`MIN_STAMP_COHORT_SECONDS`] exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StampParams {
+    cohort: u64,
+}
+
+impl StampParams {
+    /// Validates the rulebook's expiry cohort length in seconds; fails with
+    /// [`Error::InvalidStamp`] outside the bounds above.
+    pub fn new(cohort_seconds: u64) -> Result<Self, Error> {
+        check_cohort(cohort_seconds)?;
+        Ok(Self {
+            cohort: cohort_seconds,
+        })
+    }
+
+    /// Length of one expiry cohort in seconds.
+    pub fn cohort_seconds(&self) -> u64 {
+        self.cohort
+    }
+}
 
 /// Public half of a stamp issuer key: key ID, cohort length and BBS+ public
 /// key, published in the wallet's stamp key ring.
 ///
-/// The cohort length is the rulebook's stamp lifetime. Every stamp expires at
-/// a multiple of it ([`expiry_for`](Self::expiry_for)), so the revealed expiry
-/// is a coarse value shared by every stamp issued in the same half cohort.
-/// Changing the length means rotating to a new key. The BBS+ generators are
-/// re-derived from the key ID in a stamp-only domain.
+/// The cohort length comes from the rulebook ([`StampParams`]). Every stamp
+/// expires at the end of the cohort after the one it was issued in
+/// ([`expiry_for`](Self::expiry_for)), so the revealed expiry is one coarse
+/// value shared by every stamp issued in the same cohort. Changing the length
+/// means rotating to a new key. The BBS+ generators are re-derived from the
+/// key ID in a stamp-only domain.
 #[derive(Clone)]
 pub struct StampPublicKey {
     key_id: KeyId,
@@ -67,24 +109,29 @@ impl StampPublicKey {
         self.cohort
     }
 
+    /// The cohort rule as [`StampParams`].
+    pub fn params(&self) -> StampParams {
+        StampParams {
+            cohort: self.cohort,
+        }
+    }
+
     /// The exclusive expiry the issuer signs for a stamp issued at `now`: the
-    /// end of the cohort containing `now`, or the end of the next cohort when
-    /// less than half of the current one remains. Verifiers accept exactly
-    /// these two values ([`verify_stamp`](crate::verify_stamp)).
+    /// end of the cohort AFTER the one containing `now`. With the one-day
+    /// cohort, a stamp expires at the end of the UTC day after issuance, so it
+    /// lives between one and two cohorts and every stamp issued in one cohort
+    /// carries the same value. Verifiers accept exactly these values
+    /// ([`verify_stamp`](crate::verify_stamp)).
     pub fn expiry_for(&self, now: Timestamp) -> Result<Timestamp, Error> {
         check_timestamp(now)?;
-        let end = (now / self.cohort + 1) * self.cohort;
-        let expires = if (end - now) * 2 < self.cohort {
-            end + self.cohort
-        } else {
-            end
-        };
+        let expires = (now / self.cohort + 2) * self.cohort;
         check_timestamp(expires)?;
         Ok(expires)
     }
 
     /// Verifier rule: `expires` lies on the cohort grid, is still ahead of
-    /// `now` and is at most two cohorts away.
+    /// `now` and was issued no later than `now` (two cohorts plus the clock
+    /// tolerance away at most).
     pub(crate) fn check_expiry(&self, expires: Timestamp, now: Timestamp) -> Result<(), Error> {
         check_timestamp(now)?;
         if !expires.is_multiple_of(self.cohort) {
@@ -93,14 +140,33 @@ impl StampPublicKey {
         if expires <= now {
             return Err(Error::StampExpired);
         }
-        if expires - now > 2 * self.cohort {
+        if expires - now > 2 * self.cohort + STAMP_CLOCK_SKEW_SECONDS {
             return Err(Error::WrongExpiryCohort);
         }
         Ok(())
     }
 
-    /// Holder rule at unblinding: refuse a signed expiry off the public grid,
-    /// which a dishonest issuer could otherwise use to tag one holder.
+    /// Holder rule at unblinding: the signed expiry lies on the grid and is the
+    /// one the issuer rule gives for some time between the request (`begun`)
+    /// and the answer (`now`), widened by the clock tolerance. This bounds a
+    /// dishonest issuer that would pick among grid values to tag one holder.
+    pub(crate) fn check_signed_expiry(
+        &self,
+        expires: Timestamp,
+        begun: Timestamp,
+        now: Timestamp,
+    ) -> Result<(), Error> {
+        self.check_alignment(expires)?;
+        check_timestamp(now)?;
+        let earliest = self.expiry_for(begun.saturating_sub(STAMP_CLOCK_SKEW_SECONDS).max(1))?;
+        let latest = self.expiry_for(now.max(begun).saturating_add(STAMP_CLOCK_SKEW_SECONDS))?;
+        ensure((earliest..=latest).contains(&expires), Error::InvalidStamp)?;
+        ensure(now < expires, Error::StampExpired)
+    }
+
+    /// Holder rule at unblinding and restore: refuse a signed expiry off the
+    /// public grid, which a dishonest issuer could otherwise use to tag one
+    /// holder.
     pub(crate) fn check_alignment(&self, expires: Timestamp) -> Result<(), Error> {
         check_timestamp(expires)?;
         ensure(expires.is_multiple_of(self.cohort), Error::InvalidStamp)
@@ -165,7 +231,9 @@ impl core::fmt::Debug for StampPublicKey {
 
 fn check_cohort(cohort: u64) -> Result<(), Error> {
     ensure(
-        (MIN_STAMP_COHORT_SECONDS..=MAX_STAMP_COHORT_SECONDS).contains(&cohort),
+        (MIN_STAMP_COHORT_SECONDS..=MAX_STAMP_COHORT_SECONDS).contains(&cohort)
+            && cohort.is_multiple_of(MIN_STAMP_COHORT_SECONDS)
+            && MAX_STAMP_COHORT_SECONDS.is_multiple_of(cohort),
         Error::InvalidStamp,
     )
 }
@@ -181,13 +249,13 @@ pub struct StampIssuerKey {
 }
 
 impl StampIssuerKey {
-    /// Generates a fresh key for `key_id` with the given cohort length.
+    /// Generates a fresh key for `key_id` under the rulebook's stamp settings.
     pub fn generate<R: RngCore + CryptoRng>(
         rng: &mut R,
         key_id: KeyId,
-        cohort_seconds: u64,
+        params: &StampParams,
     ) -> Result<Self, Error> {
-        Self::from_secret(key_id, cohort_seconds, SecretKey(nonzero_scalar(rng)))
+        Self::from_secret(key_id, params.cohort, SecretKey(nonzero_scalar(rng)))
     }
 
     fn from_secret(key_id: KeyId, cohort: u64, secret: SecretKey<Fr>) -> Result<Self, Error> {

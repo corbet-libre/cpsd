@@ -22,6 +22,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use super::{STAMP_SLOTS, StampAction, StampDigest, StampPresentation, StampPublicKey, StampScope};
 use crate::{
     Error, HolderSecret, IssuanceChallenge, IssuerTag, KeyId, Timestamp,
+    attributes::check_timestamp,
     error::{ensure, redact},
     issuer::point_bytes,
     params::{self, Curve, IDX_SECRET, Label, STAMP_IDX_FIRST_SLOT},
@@ -90,23 +91,25 @@ pub(crate) fn statement(
 /// issuer tag (the passport tag, `secret * H("issuer tag")`) hides the same
 /// secret. The digests go into random slot positions; the remaining slots are
 /// random scalars. Fails with [`Error::InvalidStamp`] for no, too many or
-/// repeated digests.
+/// repeated digests. `now` starts the issuance window that the holder later
+/// checks the signed expiry against.
 ///
-/// Send the request to the wallet; keep the [`PendingStamp`] to unblind the
-/// answer. Before sending, the device confirms the request with one user
-/// verification over [`StampIssuanceRequest::confirmation_challenge`].
-pub fn request_stamp<R: RngCore + CryptoRng>(
+/// Crate-private: devices go through [`crate::OpaqueHolder::begin_stamp`], so
+/// no raw secret ever crosses the public API.
+pub(crate) fn request_stamp<R: RngCore + CryptoRng>(
     rng: &mut R,
     secret: &HolderSecret,
     issuer: &StampPublicKey,
     challenge: &IssuanceChallenge,
     digests: &[StampDigest],
+    now: Timestamp,
 ) -> Result<(StampIssuanceRequest, PendingStamp), Error> {
+    check_timestamp(now)?;
     let slots = shuffled_slots(rng, digests)?;
-    request_for_slots(rng, secret, secret, issuer, challenge, &slots)
+    request_for_slots(rng, secret, secret, issuer, challenge, &slots, now)
 }
 
-fn shuffled_slots<R: RngCore + CryptoRng>(
+pub(crate) fn shuffled_slots<R: RngCore + CryptoRng>(
     rng: &mut R,
     digests: &[StampDigest],
 ) -> Result<Zeroizing<[Fr; STAMP_SLOTS]>, Error> {
@@ -136,10 +139,12 @@ pub(crate) fn request_for_slots<R: RngCore + CryptoRng>(
     issuer: &StampPublicKey,
     challenge: &IssuanceChallenge,
     slots: &[Fr; STAMP_SLOTS],
+    now: Timestamp,
 ) -> Result<(StampIssuanceRequest, PendingStamp), Error> {
     let params = issuer.signature_params();
     // Pedersen hiding uses uniform randomness over the entire scalar field.
-    let blinding = Fr::rand(rng);
+    // With the commitment it would reveal `h_secret * s`; wiped on drop.
+    let blinding = Zeroizing::new(Fr::rand(rng));
     let hidden = core::iter::once((IDX_SECRET, &secret.0)).chain(
         slots
             .iter()
@@ -152,17 +157,16 @@ pub(crate) fn request_for_slots<R: RngCore + CryptoRng>(
     let issuer_tag = (params::issuer_tag_base() * tag_secret.0).into_affine();
     let bases = bases(params);
     let mut witnesses = Zeroizing::new(Vec::with_capacity(ISSUANCE_WITNESSES));
-    witnesses.push(blinding);
+    witnesses.push(*blinding);
     witnesses.push(secret.0);
     witnesses.extend_from_slice(slots);
     let randomness: Vec<Fr> = (0..ISSUANCE_WITNESSES).map(|_| Fr::rand(rng)).collect();
     // Equality follows Dock's shared-blinding pattern: the tag proof reuses the
     // secret's blinding, so honest responses coincide under one challenge.
-    let tag = PokDiscreteLogProtocol::init(
-        tag_secret.0,
-        randomness[WITNESS_SECRET],
-        &params::issuer_tag_base(),
-    );
+    // With the public response it would yield the secret; wiped on drop (the
+    // upstream protocol and commitment objects wipe their own copies).
+    let shared = Zeroizing::new(randomness[WITNESS_SECRET]);
+    let tag = PokDiscreteLogProtocol::init(tag_secret.0, *shared, &params::issuer_tag_base());
     let opening = SchnorrCommitment::new(&bases, randomness);
     let mut transcript = transcript(issuer, challenge);
     statement(
@@ -188,10 +192,10 @@ pub(crate) fn request_for_slots<R: RngCore + CryptoRng>(
         proof,
     };
     let pending = PendingStamp {
-        secret: secret.clone(),
-        blinding,
+        blinding: *blinding,
         slots: *slots,
         issuer: issuer.clone(),
+        begun: now,
     };
     Ok((request, pending))
 }
@@ -319,7 +323,8 @@ impl core::fmt::Debug for StampIssuanceRequest {
 }
 
 /// A stamp signature as returned by the wallet, still blinded; only the
-/// device holding the matching [`PendingStamp`] can unblind it.
+/// opaque holder that made the matching request can unblind it
+/// ([`crate::OpaqueHolder::finish_stamp`]).
 #[derive(Clone)]
 pub struct BlindStamp {
     pub(crate) key_id: KeyId,
@@ -381,29 +386,39 @@ impl core::fmt::Debug for BlindStamp {
     }
 }
 
-/// Device state between [`request_stamp`] and the wallet's answer: the secret,
-/// the blinding factor and the shuffled slots. Wiped on drop; storable across
-/// a restart so a completed user verification is never lost.
+/// Device state between [`request_stamp`] and the wallet's answer: the
+/// blinding factor, the shuffled slots, the stamp key and the time the request
+/// was made. It never contains the holder secret: the opaque holder supplies
+/// it at [`finish`](Self::finish). Wiped on drop; kept only inside
+/// [`crate::OpaqueHolder`] and its sealed state.
 #[derive(Zeroize, ZeroizeOnDrop)]
-pub struct PendingStamp {
-    secret: HolderSecret,
+pub(crate) struct PendingStamp {
     blinding: Fr,
     slots: [Fr; STAMP_SLOTS],
     #[zeroize(skip)]
     issuer: StampPublicKey,
+    begun: Timestamp,
 }
 
 impl PendingStamp {
-    /// Unblinds the wallet's answer and checks the signature over the secret,
+    /// Unblinds the wallet's answer and checks the signature over `secret`,
     /// the slots and the signed attributes, and that the expiry lies on the
-    /// key's public cohort grid. Returns the stamp.
-    pub fn finish(self, blind: &BlindStamp) -> Result<Stamp, Error> {
+    /// key's cohort grid inside the issuance window from the request to `now`
+    /// ([`StampPublicKey::check_signed_expiry`]). Returns the stamp.
+    pub(crate) fn finish(
+        self,
+        secret: &HolderSecret,
+        blind: &BlindStamp,
+        now: Timestamp,
+    ) -> Result<Stamp, Error> {
         if blind.key_id != *self.issuer.key_id() {
             return Err(Error::KeyMismatch);
         }
+        self.issuer
+            .check_signed_expiry(blind.expires, self.begun, now)?;
         let signature = blind.signature.clone().unblind(&self.blinding);
         Stamp::assemble(
-            self.secret.clone(),
+            secret,
             self.issuer.clone(),
             blind.epoch,
             blind.expires,
@@ -412,32 +427,38 @@ impl PendingStamp {
         )
     }
 
-    /// Encoding for device storage. Contains the secret; wipes itself on drop.
-    pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
+    /// The stamp key the request is addressed to.
+    pub(crate) fn issuer(&self) -> &StampPublicKey {
+        &self.issuer
+    }
+
+    /// Encoding for the holder's sealed state, without the holder secret.
+    /// Wipes itself on drop.
+    pub(crate) fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         let mut w = Writer::new(Kind::PendingStamp);
-        w.ark(&self.secret.0);
         w.ark(&self.blinding);
         for slot in &self.slots {
             w.ark(slot);
         }
         self.issuer.encode_body(&mut w);
+        w.u64(self.begun);
         w.finish_secret()
     }
 
     /// Restores state written by [`to_bytes`](Self::to_bytes).
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         let mut r = Reader::new(bytes, Kind::PendingStamp)?;
-        let secret = HolderSecret(r.ark::<Fr>("holder secret")?);
         let blinding = r.ark::<Fr>("blinding")?;
         let slots = read_slots(&mut r)?;
         let issuer = StampPublicKey::decode_body(&mut r)?;
+        let begun = r.u64()?;
         r.finish()?;
-        ensure(!secret.0.is_zero(), Error::InvalidKey)?;
+        check_timestamp(begun)?;
         Ok(Self {
-            secret,
             blinding,
             slots,
             issuer,
+            begun,
         })
     }
 }
@@ -461,11 +482,12 @@ fn read_slots(r: &mut Reader<'_>) -> Result<[Fr; STAMP_SLOTS], Error> {
 /// A confirmation stamp: the unblinded BBS+ signature over the holder secret,
 /// key ID, epoch, expiry cohort and sixteen slots.
 ///
-/// Held only by the device. Shown only as a one-slot [`StampPresentation`].
-/// Wiped on drop; `Debug` shows the public attributes only.
+/// It does NOT contain the holder secret: every operation takes it from the
+/// opaque holder that retains this stamp ([`crate::OpaqueHolder::present_stamp`]),
+/// and the encoding is useless without it. Shown only as a one-slot
+/// [`StampPresentation`]. Wiped on drop; `Debug` shows the public attributes.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct Stamp {
-    pub(crate) secret: HolderSecret,
+pub(crate) struct Stamp {
     #[zeroize(skip)]
     pub(crate) issuer: StampPublicKey,
     pub(crate) epoch: u64,
@@ -476,7 +498,7 @@ pub struct Stamp {
 
 impl Stamp {
     fn assemble(
-        secret: HolderSecret,
+        secret: &HolderSecret,
         issuer: StampPublicKey,
         epoch: u64,
         expires: Timestamp,
@@ -486,7 +508,6 @@ impl Stamp {
         ensure(!secret.0.is_zero(), Error::InvalidKey)?;
         issuer.check_alignment(expires)?;
         let stamp = Self {
-            secret,
             issuer,
             epoch,
             expires,
@@ -496,7 +517,7 @@ impl Stamp {
         stamp
             .signature
             .verify(
-                &stamp.messages(),
+                &stamp.messages(secret),
                 stamp.issuer.bbs_public_key().clone(),
                 stamp.issuer.signature_params().clone(),
             )
@@ -504,9 +525,9 @@ impl Stamp {
         Ok(stamp)
     }
 
-    pub(crate) fn messages(&self) -> Zeroizing<Vec<Fr>> {
+    pub(crate) fn messages(&self, secret: &HolderSecret) -> Zeroizing<Vec<Fr>> {
         params::stamp_messages(
-            &self.secret.0,
+            &secret.0,
             self.issuer.key_id(),
             self.epoch,
             self.expires,
@@ -520,28 +541,24 @@ impl Stamp {
     }
 
     /// The stamp key that signed it.
-    pub fn issuer(&self) -> &StampPublicKey {
+    pub(crate) fn issuer(&self) -> &StampPublicKey {
         &self.issuer
     }
 
     /// Signing key ID.
-    pub fn key_id(&self) -> &KeyId {
+    pub(crate) fn key_id(&self) -> &KeyId {
         self.issuer.key_id()
     }
 
-    /// The signed stamp epoch.
-    pub fn epoch(&self) -> u64 {
-        self.epoch
-    }
-
-    /// The signed exclusive expiry (end of the cohort).
-    pub fn expires(&self) -> Timestamp {
-        self.expires
-    }
-
-    /// Whether the stamp carries the digest of `action` in `scope`.
-    pub fn covers(&self, scope: &StampScope, action: &StampAction) -> bool {
-        let member = self.secret.pseudonym(scope.community());
+    /// Whether the stamp carries the digest of `action` in `scope` for the
+    /// member whose secret is `secret`.
+    pub(crate) fn covers(
+        &self,
+        secret: &HolderSecret,
+        scope: &StampScope,
+        action: &StampAction,
+    ) -> bool {
+        let member = secret.pseudonym(scope.community());
         self.slot_of(&action.digest(scope.fingerprint(), &member))
             .is_some()
     }
@@ -551,22 +568,23 @@ impl Stamp {
     /// (computed with the member's own pseudonym in `scope`) and proves that
     /// pseudonym. Fails with [`Error::StampDigestMissing`] if the stamp does
     /// not carry the digest. The result verifies offline ([`crate::verify_stamp`]).
-    pub fn present<R: RngCore + CryptoRng>(
+    pub(crate) fn present<R: RngCore + CryptoRng>(
         &self,
         rng: &mut R,
+        secret: &HolderSecret,
         scope: &StampScope,
         action: &StampAction,
     ) -> Result<StampPresentation, Error> {
-        let member = self.secret.pseudonym(scope.community());
+        let member = secret.pseudonym(scope.community());
         let digest = action.digest(scope.fingerprint(), &member);
         let slot = self.slot_of(&digest).ok_or(Error::StampDigestMissing)?;
-        super::presentation::present(rng, self, scope, slot, digest)
+        super::presentation::present(rng, secret, self, scope, slot, digest)
     }
 
-    /// Encoding for device storage. Contains the secret; wipes itself on drop.
-    pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
+    /// Encoding for the holder's sealed state, without the holder secret.
+    /// Wipes itself on drop.
+    pub(crate) fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         let mut w = Writer::new(Kind::Stamp);
-        w.ark(&self.secret.0);
         self.issuer.encode_body(&mut w);
         w.u64(self.epoch);
         w.u64(self.expires);
@@ -577,11 +595,11 @@ impl Stamp {
         w.finish_secret()
     }
 
-    /// Restores a stamp written by [`to_bytes`](Self::to_bytes) and re-checks
-    /// its signature.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+    /// Restores a stamp written by [`to_bytes`](Self::to_bytes) for the holder
+    /// whose secret is `secret` and re-checks its signature, so a stamp of
+    /// another holder never restores.
+    pub(crate) fn from_bytes(bytes: &[u8], secret: &HolderSecret) -> Result<Self, Error> {
         let mut r = Reader::new(bytes, Kind::Stamp)?;
-        let secret = HolderSecret(r.ark::<Fr>("holder secret")?);
         let issuer = StampPublicKey::decode_body(&mut r)?;
         let epoch = r.u64()?;
         let expires = r.u64()?;

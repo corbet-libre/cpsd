@@ -87,6 +87,9 @@ pub enum Error {
     StampExpired,
     /// This action digest was already used in the community.
     StampReplayed,
+    /// The wallet's verified user verification does not cover this exact
+    /// stamp request and nonce.
+    UnconfirmedStampRequest,
 }
 
 impl fmt::Display for Error {
@@ -130,6 +133,9 @@ impl fmt::Display for Error {
             Error::StampDigestMissing => f.write_str("stamp does not cover this action"),
             Error::StampExpired => f.write_str("confirmation stamp expired"),
             Error::StampReplayed => f.write_str("confirmation stamp digest already used"),
+            Error::UnconfirmedStampRequest => {
+                f.write_str("stamp request not covered by the user verification")
+            }
         }
     }
 }

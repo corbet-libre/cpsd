@@ -47,6 +47,8 @@ pub(crate) enum Kind {
     PendingStamp = 24,
     Stamp = 25,
     StampPresentation = 26,
+    OpaqueHolderWithStamps = 27,
+    StampState = 28,
 }
 
 impl Kind {
@@ -72,7 +74,9 @@ impl Kind {
             | Self::BlindStamp
             | Self::PendingStamp
             | Self::Stamp
-            | Self::StampPresentation => 4,
+            | Self::StampPresentation
+            | Self::OpaqueHolderWithStamps
+            | Self::StampState => 4,
             _ => 2,
         }
     }

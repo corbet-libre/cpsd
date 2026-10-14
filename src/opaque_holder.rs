@@ -2,10 +2,13 @@
 
 use crate::rand::{CryptoRng, RngCore, SeedableRng};
 use crate::{
-    AuthenticatedCommunity, BlindPassport, CommunityId, Error, HolderSecret, IssuanceChallenge,
-    IssuanceRequest, IssuerPublicKey, IssuerTag, Passport, PassportAttributes, PendingIssuance,
-    Presentation, Pseudonym, RootBoardIssuanceRequest, RootBoardPresentation, Timestamp,
+    AuthenticatedCommunity, BlindPassport, BlindStamp, CommunityId, Error, HolderSecret,
+    IssuanceChallenge, IssuanceRequest, IssuerPublicKey, IssuerTag, Passport, PassportAttributes,
+    PendingIssuance, Presentation, Pseudonym, RootBoardIssuanceRequest, RootBoardPresentation,
+    StampAction, StampDigest, StampIssuanceRequest, StampPresentation, StampPublicKey, StampScope,
+    Timestamp,
     root_board::{self, BlindRootBoardCredential, state::RootBoardState},
+    stamp::{self, StampState},
 };
 use rand_chacha::ChaCha20Rng;
 use zeroize::Zeroize;
@@ -16,10 +19,12 @@ pub use sealing::SealedHolder;
 /// Nonexporting deterministic holder and its current issuance state.
 ///
 /// Wallet retains this engine and lends access through current authorization.
-/// Keys only derives its purpose-separated seed. No secret, RNG, pending opening
-/// or passport accessor exists; there is
+/// Keys only derives its purpose-separated seed. No secret, RNG, pending opening,
+/// passport or stamp accessor exists; there is
 /// no Clone, Debug or serialization implementation. Public issuance messages and
 /// presentations still use the original upstream BBS+ implementation.
+/// Confirmation stamps are requested, unblinded, retained and presented only
+/// here; the stamp API never accepts or returns a holder secret.
 ///
 /// ```compile_fail
 /// let holder = cpsd::OpaqueHolder::from_seed(&mut [7; 32]);
@@ -37,12 +42,28 @@ pub use sealing::SealedHolder;
 /// let holder = cpsd::OpaqueHolder::from_seed(&mut [7; 32]);
 /// let diagnostic = format!("{holder:?}");
 /// ```
+/// No stamp operation takes a raw secret, and no stamp state is exported:
+/// ```compile_fail
+/// let request = cpsd::request_stamp;
+/// ```
+/// ```compile_fail
+/// fn stamp(pending: cpsd::PendingStamp) {}
+/// ```
+/// ```compile_fail
+/// fn stamp(stamp: cpsd::Stamp) {}
+/// ```
+/// ```compile_fail
+/// let holder = cpsd::OpaqueHolder::from_seed(&mut [7; 32]);
+/// let stamps = holder.stamps();
+/// ```
 pub struct OpaqueHolder {
     secret: HolderSecret,
     pending: Option<PendingIssuance>,
     passport: Option<Passport>,
     // Private extension, retained and sealed only beside the original state.
     root_board: RootBoardState,
+    // Confirmation stamps; encoded without the secret and sealed beside it.
+    stamps: StampState,
     sealing: Option<std::sync::Arc<sealing::HolderSeal>>,
 }
 
@@ -62,6 +83,7 @@ impl OpaqueHolder {
             pending: None,
             passport: None,
             root_board: RootBoardState::default(),
+            stamps: StampState::default(),
             sealing: None,
         }
     }
@@ -205,5 +227,87 @@ impl OpaqueHolder {
             .ok_or(Error::PassportUnavailable)?;
         let request = expected.authenticate_root_board_request(signed_request, now)?;
         root_board::present(rng, passport, credential, &request)
+    }
+
+    /// Start one confirmation stamp for up to [`crate::STAMP_SLOTS`] distinct
+    /// actions (typically one per community), keeping the opening internally.
+    ///
+    /// Each digest is computed here with this holder's own pseudonym in its
+    /// scope; digests fill shuffled slots and the rest are random. `challenge`
+    /// is the wallet's single-use stamp nonce and `now` starts the window the
+    /// signed expiry is checked against. Confirm the request with one user
+    /// verification over [`StampIssuanceRequest::confirmation_challenge`].
+    /// A pending stamp request must finish or be cancelled first.
+    pub fn begin_stamp<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        issuer: &StampPublicKey,
+        challenge: &IssuanceChallenge,
+        actions: &[(StampScope, StampAction)],
+        now: Timestamp,
+    ) -> Result<StampIssuanceRequest, Error> {
+        if self.stamps.pending.is_some() {
+            return Err(Error::IssuancePending);
+        }
+        let digests: Vec<StampDigest> = actions
+            .iter()
+            .map(|(scope, action)| {
+                action.digest(scope.fingerprint(), &self.pseudonym(scope.community()))
+            })
+            .collect();
+        let (request, pending) =
+            stamp::request_stamp(rng, &self.secret, issuer, challenge, &digests, now)?;
+        self.stamps.pending = Some(pending);
+        Ok(request)
+    }
+
+    /// Consume the pending stamp request and retain only a verified stamp
+    /// whose signed expiry fits the issuance window ending at `now`.
+    ///
+    /// Even an invalid answer consumes the attempt; retained stamps are kept.
+    /// At most eight stamps are retained: a new one first drops expired ones,
+    /// then the one that expires first.
+    pub fn finish_stamp(&mut self, blind: &BlindStamp, now: Timestamp) -> Result<(), Error> {
+        self.stamps.finish(&self.secret, blind, now)
+    }
+
+    /// Drop a pending stamp request without affecting retained stamps.
+    pub fn cancel_stamp(&mut self) {
+        self.stamps.pending = None;
+    }
+
+    /// The stamp key of the pending stamp request, if any.
+    pub fn pending_stamp_key(&self) -> Option<&StampPublicKey> {
+        self.stamps
+            .pending
+            .as_ref()
+            .map(stamp::PendingStamp::issuer)
+    }
+
+    /// Whether an unexpired retained stamp approves `action` in `scope`.
+    pub fn stamp_covers(&self, scope: &StampScope, action: &StampAction, now: Timestamp) -> bool {
+        self.stamps
+            .covering(&self.secret, scope, action, now)
+            .is_ok()
+    }
+
+    /// Present the retained stamp that approves `action` in `scope`: reveals
+    /// the key ID, epoch, expiry and exactly that action's slot, and proves
+    /// this holder's pseudonym in `scope`. Fails with
+    /// [`Error::StampDigestMissing`] when no retained stamp carries the action
+    /// and with [`Error::StampExpired`] when only expired ones do. The result
+    /// verifies offline ([`crate::verify_stamp`]); presenting again is allowed
+    /// (the community records each digest once).
+    pub fn present_stamp<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        scope: &StampScope,
+        action: &StampAction,
+        now: Timestamp,
+    ) -> Result<StampPresentation, Error> {
+        crate::attributes::check_timestamp(now)?;
+        self.stamps
+            .covering(&self.secret, scope, action, now)?
+            .present(rng, &self.secret, scope, action)
     }
 }

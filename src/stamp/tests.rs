@@ -1,5 +1,7 @@
 //! Stamp tests: real BBS+ issuance and presentations, seeded property loops,
-//! hostile provers built from the crate's own building blocks, and refusals.
+//! requests and proofs built from the crate's own building blocks with wrong
+//! witnesses or claims (they show the code fails closed; soundness itself
+//! rests on Dock's proofs of knowledge), and refusals.
 
 use std::collections::BTreeSet;
 
@@ -12,20 +14,28 @@ use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use schnorr_pok::{SchnorrCommitment, discrete_log::PokDiscreteLog};
 
 use super::issuance::{
-    ISSUANCE_WITNESSES, IssuanceProof, WITNESS_SECRET, bases, request_for_slots, statement,
-    transcript,
+    ISSUANCE_WITNESSES, IssuanceProof, WITNESS_SECRET, bases, request_for_slots, shuffled_slots,
+    statement, transcript,
 };
 use super::presentation::{StampRequest, prove};
+use super::state::{MAX_HELD_STAMPS, StampState};
+use super::{PendingStamp, Stamp, request_stamp};
 use crate::*;
 
-const COHORT: u64 = 600;
+/// The finest accepted cohort (one hour); the rulebook default is one day.
+const COHORT: u64 = 3_600;
 const EPOCH: u64 = 9;
-/// 1_000_200 = 1667 * 600 + 0, so the cohort ends at 1_000_800 (a full cohort ahead).
-const NOW: Timestamp = 1_000_200;
-const EXPIRES: Timestamp = 1_000_800;
+/// 3_600_200 lies 200 s into cohort 1000, so the stamp expires at the end of
+/// cohort 1001: 3_607_200.
+const NOW: Timestamp = 3_600_200;
+const EXPIRES: Timestamp = 3_607_200;
+
+fn params() -> StampParams {
+    StampParams::new(COHORT).unwrap()
+}
 
 fn key(rng: &mut StdRng, name: &str) -> StampIssuerKey {
-    StampIssuerKey::generate(rng, KeyId::new(name).unwrap(), COHORT).unwrap()
+    StampIssuerKey::generate(rng, KeyId::new(name).unwrap(), &params()).unwrap()
 }
 
 fn scope(n: usize) -> StampScope {
@@ -49,25 +59,62 @@ fn digest(secret: &HolderSecret, scope: &StampScope, action: &StampAction) -> St
     action.digest(scope.fingerprint(), &secret.pseudonym(scope.community()))
 }
 
-/// Issues a stamp through every transport encoding.
+/// A holder secret with one stamp: what the opaque holder retains, opened up
+/// for tests of the crate-private building blocks.
+struct Held {
+    secret: HolderSecret,
+    stamp: Stamp,
+}
+
+impl Held {
+    fn present(
+        &self,
+        rng: &mut StdRng,
+        scope: &StampScope,
+        action: &StampAction,
+    ) -> Result<StampPresentation, Error> {
+        self.stamp.present(rng, &self.secret, scope, action)
+    }
+
+    fn covers(&self, scope: &StampScope, action: &StampAction) -> bool {
+        self.stamp.covers(&self.secret, scope, action)
+    }
+
+    fn key_id(&self) -> &KeyId {
+        self.stamp.key_id()
+    }
+
+    fn epoch(&self) -> u64 {
+        self.stamp.epoch
+    }
+
+    fn expires(&self) -> Timestamp {
+        self.stamp.expires
+    }
+}
+
+/// Issues a stamp through every transport and storage encoding.
 fn issue(
     rng: &mut StdRng,
     key: &StampIssuerKey,
     secret: &HolderSecret,
     covered: &[(StampScope, StampAction)],
-) -> Stamp {
+) -> Held {
     let digests: Vec<StampDigest> = covered.iter().map(|(s, a)| digest(secret, s, a)).collect();
     let nonce = IssuanceChallenge::generate(rng);
     let (request, pending) =
-        request_stamp(rng, secret, key.public_key(), &nonce, &digests).unwrap();
+        request_stamp(rng, secret, key.public_key(), &nonce, &digests, NOW).unwrap();
     let request = StampIssuanceRequest::from_bytes(&request.to_bytes()).unwrap();
     let pending = PendingStamp::from_bytes(&pending.to_bytes()).unwrap();
     let blind = key.issue_blind(rng, &request, &nonce, EPOCH, NOW).unwrap();
     let blind = BlindStamp::from_bytes(&blind.to_bytes()).unwrap();
     assert_eq!((blind.epoch(), blind.expires()), (EPOCH, EXPIRES));
     assert_eq!(blind.key_id(), key.public_key().key_id());
-    let stamp = pending.finish(&blind).unwrap();
-    Stamp::from_bytes(&stamp.to_bytes()).unwrap()
+    let stamp = pending.finish(secret, &blind, NOW).unwrap();
+    Held {
+        secret: secret.clone(),
+        stamp: Stamp::from_bytes(&stamp.to_bytes(), secret).unwrap(),
+    }
 }
 
 fn covered(rng: &mut StdRng, count: usize) -> Vec<(StampScope, StampAction)> {
@@ -84,6 +131,7 @@ fn verify_one(
 ) -> Result<VerifiedStamp, Error> {
     verify_stamp(
         &[key.public_key().clone()],
+        &params(),
         scope,
         EPOCH,
         action,
@@ -107,7 +155,7 @@ fn one_stamp_approves_one_action_in_each_of_sixteen_communities() {
         (stamp.key_id(), stamp.epoch(), stamp.expires()),
         (key.public_key().key_id(), EPOCH, EXPIRES)
     );
-    assert_eq!(stamp.issuer(), key.public_key());
+    assert_eq!(stamp.stamp.issuer(), key.public_key());
     let mut slots = BTreeSet::new();
     for (scope, action) in &covered {
         assert!(stamp.covers(scope, action));
@@ -213,7 +261,7 @@ fn presentations_of_one_stamp_share_only_key_epoch_and_cohort_across_communities
 
 fn forged_presentation(
     rng: &mut StdRng,
-    stamp: &Stamp,
+    stamp: &Held,
     scope: &StampScope,
     slot: usize,
     digest: StampDigest,
@@ -226,7 +274,14 @@ fn forged_presentation(
         slot,
         digest,
     );
-    let proof = prove(rng, stamp, &request, &pseudonym.point().unwrap()).unwrap();
+    let proof = prove(
+        rng,
+        &stamp.secret,
+        &stamp.stamp,
+        &request,
+        &pseudonym.point().unwrap(),
+    )
+    .unwrap();
     StampPresentation {
         key_id: stamp.key_id().clone(),
         epoch: stamp.epoch(),
@@ -320,7 +375,7 @@ fn tampered_challenge_scope_epoch_key_or_proof_fails() {
     let p = stamp.present(&mut rng, scope, act).unwrap();
     let ring = [key.public_key().clone()];
     let check = |scope: &StampScope, act: &StampAction, p: &StampPresentation| {
-        verify_stamp(&ring, scope, EPOCH, act, p, NOW).err()
+        verify_stamp(&ring, &params(), scope, EPOCH, act, p, NOW).err()
     };
     // Every digest input is bound: kind, payload, salt, fingerprint, community.
     let tampered = [
@@ -356,22 +411,23 @@ fn tampered_challenge_scope_epoch_key_or_proof_fails() {
     assert_eq!(check(&wrong_community, act, &p), Some(Error::InvalidProof));
     // Epoch, key ring and expiry window.
     assert_eq!(
-        verify_stamp(&ring, scope, EPOCH + 1, act, &p, NOW).err(),
+        verify_stamp(&ring, &params(), scope, EPOCH + 1, act, &p, NOW).err(),
         Some(Error::WrongEpoch)
     );
     assert_eq!(
-        verify_stamp(&[], scope, EPOCH, act, &p, NOW).err(),
+        verify_stamp(&[], &params(), scope, EPOCH, act, &p, NOW).err(),
         Some(Error::UnknownKey)
     );
     let twice = [key.public_key().clone(), key.public_key().clone()];
     assert_eq!(
-        verify_stamp(&twice, scope, EPOCH, act, &p, NOW).err(),
+        verify_stamp(&twice, &params(), scope, EPOCH, act, &p, NOW).err(),
         Some(Error::DuplicateKeyId)
     );
     let other_key = self::key(&mut rng, "stamp-t");
     assert_eq!(
         verify_stamp(
             &[other_key.public_key().clone()],
+            &params(),
             scope,
             EPOCH,
             act,
@@ -382,29 +438,41 @@ fn tampered_challenge_scope_epoch_key_or_proof_fails() {
         Some(Error::InvalidProof)
     );
     assert_eq!(
-        verify_stamp(&ring, scope, EPOCH, act, &p, EXPIRES).err(),
+        verify_stamp(&ring, &params(), scope, EPOCH, act, &p, EXPIRES).err(),
         Some(Error::StampExpired)
     );
+    // Issued at most two cohorts plus the clock tolerance in the verifier's future.
+    let earliest = EXPIRES - 2 * COHORT - STAMP_CLOCK_SKEW_SECONDS;
     assert_eq!(
-        verify_stamp(&ring, scope, EPOCH, act, &p, EXPIRES - 2 * COHORT - 1).err(),
+        verify_stamp(&ring, &params(), scope, EPOCH, act, &p, earliest - 1).err(),
         Some(Error::WrongExpiryCohort)
     );
-    verify_stamp(&ring, scope, EPOCH, act, &p, EXPIRES - 2 * COHORT).unwrap();
-    verify_stamp(&ring, scope, EPOCH, act, &p, EXPIRES - 1).unwrap();
+    verify_stamp(&ring, &params(), scope, EPOCH, act, &p, earliest).unwrap();
+    verify_stamp(&ring, &params(), scope, EPOCH, act, &p, EXPIRES - 1).unwrap();
+    // The verifier's configured cohort must be the key's.
+    for other in [2 * COHORT, MAX_STAMP_COHORT_SECONDS] {
+        let other = StampParams::new(other).unwrap();
+        assert_eq!(
+            verify_stamp(&ring, &other, scope, EPOCH, act, &p, NOW).err(),
+            Some(Error::WrongExpiryCohort)
+        );
+    }
     assert_eq!(
-        verify_stamp(&ring, scope, EPOCH, act, &p, 0).err(),
+        verify_stamp(&ring, &params(), scope, EPOCH, act, &p, 0).err(),
         Some(Error::InvalidTimestamp)
     );
     // Revealed metadata cannot be rewritten.
     let mut q = p.clone();
     q.epoch = EPOCH + 1;
     assert_eq!(
-        verify_stamp(&ring, scope, EPOCH + 1, act, &q, NOW).err(),
+        verify_stamp(&ring, &params(), scope, EPOCH + 1, act, &q, NOW).err(),
         Some(Error::InvalidProof)
     );
     let mut q = p.clone();
-    q.expires = EXPIRES + COHORT;
+    q.expires = EXPIRES - COHORT;
     assert_eq!(check(scope, act, &q), Some(Error::InvalidProof));
+    q.expires = EXPIRES + COHORT;
+    assert_eq!(check(scope, act, &q), Some(Error::WrongExpiryCohort));
     let mut q = p.clone();
     q.pseudonym = secret.pseudonym(covered[1].0.community());
     assert_eq!(check(scope, act, &q), Some(Error::InvalidProof));
@@ -424,7 +492,7 @@ fn tampered_challenge_scope_epoch_key_or_proof_fails() {
         let mut flipped = bytes.clone();
         flipped[index] ^= 0x10;
         let refused = StampPresentation::from_bytes(&flipped)
-            .and_then(|q| verify_stamp(&ring, scope, EPOCH, act, &q, NOW));
+            .and_then(|q| verify_stamp(&ring, &params(), scope, EPOCH, act, &q, NOW));
         assert!(refused.is_err(), "bit flip at {index} accepted");
     }
     assert_eq!(check(scope, act, &p), None);
@@ -487,7 +555,7 @@ fn issuance_proof_binds_opening_tag_secret_key_and_nonce() {
         &scope(0),
         &action(&mut rng, "lineage.pair"),
     )];
-    let (honest, _) = request_stamp(&mut rng, &secret, key.public_key(), &nonce, &d).unwrap();
+    let (honest, _) = request_stamp(&mut rng, &secret, key.public_key(), &nonce, &d, NOW).unwrap();
     assert_eq!(honest.key_id(), key.public_key().key_id());
     assert_eq!(honest.issuer_tag(), secret.issuer_tag());
     assert!(format!("{honest:?}").contains("issuer_tag"));
@@ -517,6 +585,7 @@ fn issuance_proof_binds_opening_tag_secret_key_and_nonce() {
         key.public_key(),
         &nonce,
         &slots,
+        NOW,
     )
     .unwrap();
     assert_eq!(mixed.issuer_tag(), secret.issuer_tag());
@@ -571,14 +640,28 @@ fn request_digest_lists_and_confirmation_challenge() {
         &[digests[0], digests[1], digests[0]][..],
     ] {
         assert_eq!(
-            request_stamp(&mut rng, &secret, key.public_key(), &nonce, bad).err(),
+            request_stamp(&mut rng, &secret, key.public_key(), &nonce, bad, NOW).err(),
             Some(Error::InvalidStamp)
         );
     }
-    let (request, _) =
-        request_stamp(&mut rng, &secret, key.public_key(), &nonce, &digests[..1]).unwrap();
-    let (again, _) =
-        request_stamp(&mut rng, &secret, key.public_key(), &nonce, &digests[..1]).unwrap();
+    let (request, _) = request_stamp(
+        &mut rng,
+        &secret,
+        key.public_key(),
+        &nonce,
+        &digests[..1],
+        NOW,
+    )
+    .unwrap();
+    let (again, _) = request_stamp(
+        &mut rng,
+        &secret,
+        key.public_key(),
+        &nonce,
+        &digests[..1],
+        NOW,
+    )
+    .unwrap();
     let challenge = request.confirmation_challenge(&nonce);
     assert_eq!(challenge, request.confirmation_challenge(&nonce));
     assert_ne!(challenge, again.confirmation_challenge(&nonce));
@@ -589,7 +672,7 @@ fn request_digest_lists_and_confirmation_challenge() {
 }
 
 #[test]
-fn unblinding_checks_key_grid_and_signature() {
+fn unblinding_checks_key_window_and_signature() {
     let mut rng = StdRng::seed_from_u64(6);
     let key = key(&mut rng, "stamp-b");
     let secret = HolderSecret::generate(&mut rng);
@@ -600,15 +683,15 @@ fn unblinding_checks_key_grid_and_signature() {
         &action(&mut rng, "lineage.pair"),
     )];
     let pending = || {
-        let (request, pending) = request_stamp(
+        request_stamp(
             &mut StdRng::seed_from_u64(9),
             &secret,
             key.public_key(),
             &nonce,
             &d,
+            NOW,
         )
-        .unwrap();
-        (request, pending)
+        .unwrap()
     };
     let (request, _) = pending();
     let blind = key
@@ -616,66 +699,136 @@ fn unblinding_checks_key_grid_and_signature() {
         .unwrap();
     assert!(format!("{blind:?}").contains("BlindStamp"));
     assert!(format!("{:?}", pending().1).contains("PendingStamp"));
+    assert_eq!(pending().1.issuer(), key.public_key());
+    let finish = |blind: &BlindStamp, now| pending().1.finish(&secret, blind, now).err();
     let mut wrong = blind.clone();
     wrong.key_id = KeyId::new("other").unwrap();
-    assert_eq!(pending().1.finish(&wrong).err(), Some(Error::KeyMismatch));
+    assert_eq!(finish(&wrong, NOW), Some(Error::KeyMismatch));
     let mut off_grid = blind.clone();
     off_grid.expires += 1;
-    assert_eq!(
-        pending().1.finish(&off_grid).err(),
-        Some(Error::InvalidStamp)
-    );
+    assert_eq!(finish(&off_grid, NOW), Some(Error::InvalidStamp));
+    // A grid value outside the issuance window (request to answer, widened by
+    // the clock tolerance) is refused before the signature check: a
+    // dishonest wallet cannot pick among grid values to tag one holder.
     let mut later = blind.clone();
     later.expires += COHORT;
+    assert_eq!(finish(&later, NOW), Some(Error::InvalidStamp));
+    let mut earlier = blind.clone();
+    earlier.expires -= 2 * COHORT;
+    assert_eq!(finish(&earlier, NOW), Some(Error::InvalidStamp));
+    // NOW is 200 s into its cohort, so a wallet clock up to the tolerance
+    // behind may still sign the previous value; the signature decides.
+    earlier.expires += COHORT;
+    assert_eq!(finish(&earlier, NOW), Some(Error::InvalidSignature));
+    // Answered a cohort later (for example after a restart), the next grid
+    // value lies inside the window and only the signature decides.
+    assert_eq!(finish(&later, NOW + COHORT), Some(Error::InvalidSignature));
+    // The tolerance covers a wallet clock just across the next cohort boundary.
+    let boundary = (NOW / COHORT + 1) * COHORT;
+    let skewed = key.public_key().expiry_for(boundary).unwrap();
+    assert_eq!(skewed, EXPIRES + COHORT);
+    let near = boundary - STAMP_CLOCK_SKEW_SECONDS;
+    let (request, pending_near) =
+        request_stamp(&mut rng, &secret, key.public_key(), &nonce, &d, near).unwrap();
+    let blind_near = key
+        .issue_blind(&mut rng, &request, &nonce, EPOCH, boundary)
+        .unwrap();
+    assert_eq!(blind_near.expires(), skewed);
+    pending_near.finish(&secret, &blind_near, near).unwrap();
+    let (request, pending_far) =
+        request_stamp(&mut rng, &secret, key.public_key(), &nonce, &d, near - 1).unwrap();
+    let blind_far = key
+        .issue_blind(&mut rng, &request, &nonce, EPOCH, boundary)
+        .unwrap();
     assert_eq!(
-        pending().1.finish(&later).err(),
-        Some(Error::InvalidSignature)
+        pending_far.finish(&secret, &blind_far, near - 1).err(),
+        Some(Error::InvalidStamp)
     );
     let mut epoch = blind.clone();
     epoch.epoch += 1;
+    assert_eq!(finish(&epoch, NOW), Some(Error::InvalidSignature));
+    // An answer that arrives after the stamp expired is useless and refused.
+    assert_eq!(finish(&blind, EXPIRES), Some(Error::StampExpired));
+    assert_eq!(finish(&blind, 0), Some(Error::InvalidTimestamp));
+    // Another secret never unblinds into a valid stamp.
+    let other = HolderSecret::generate(&mut rng);
     assert_eq!(
-        pending().1.finish(&epoch).err(),
+        pending().1.finish(&other, &blind, NOW).err(),
         Some(Error::InvalidSignature)
     );
-    let stamp = pending().1.finish(&blind).unwrap();
+    let stamp = pending().1.finish(&secret, &blind, NOW).unwrap();
     assert!(format!("{stamp:?}").contains("Stamp"));
     assert!(!format!("{stamp:?}").contains("secret"));
+    assert_eq!(
+        request_stamp(&mut rng, &secret, key.public_key(), &nonce, &d, 0).err(),
+        Some(Error::InvalidTimestamp)
+    );
 }
 
 #[test]
-fn cohort_rule_for_issuer_holder_and_verifier() {
+fn cohort_params_rule_for_issuer_holder_and_verifier() {
     let mut rng = StdRng::seed_from_u64(7);
+    // Whole hours that divide one UTC day; nothing finer than an hour.
     for bad in [
         0,
+        60,
         MIN_STAMP_COHORT_SECONDS - 1,
-        MAX_STAMP_COHORT_SECONDS + 1,
+        MIN_STAMP_COHORT_SECONDS + 1,
+        5 * 3_600,
+        7 * 3_600,
+        MAX_STAMP_COHORT_SECONDS + 3_600,
+        2 * MAX_STAMP_COHORT_SECONDS,
     ] {
         assert_eq!(
-            StampIssuerKey::generate(&mut rng, KeyId::new("k").unwrap(), bad).err(),
-            Some(Error::InvalidStamp)
+            StampParams::new(bad).err(),
+            Some(Error::InvalidStamp),
+            "{bad}"
         );
     }
-    for good in [MIN_STAMP_COHORT_SECONDS, MAX_STAMP_COHORT_SECONDS] {
-        let k = StampIssuerKey::generate(&mut rng, KeyId::new("k").unwrap(), good).unwrap();
-        assert_eq!(k.public_key().cohort_seconds(), good);
+    for hours in [1, 2, 3, 4, 6, 8, 12, 24] {
+        let params = StampParams::new(hours * 3_600).unwrap();
+        assert_eq!(params.cohort_seconds(), hours * 3_600);
+        let k = StampIssuerKey::generate(&mut rng, KeyId::new("k").unwrap(), &params).unwrap();
+        assert_eq!(k.public_key().cohort_seconds(), hours * 3_600);
+        assert_eq!(k.public_key().params(), params);
     }
+    assert_eq!(
+        (MIN_STAMP_COHORT_SECONDS, MAX_STAMP_COHORT_SECONDS),
+        (3_600, 86_400)
+    );
+    // The rulebook default, one UTC day: a stamp expires at the end of the
+    // UTC day after issuance, whatever the time of day.
+    let day = StampParams::new(86_400).unwrap();
+    let daily = StampIssuerKey::generate(&mut rng, KeyId::new("day").unwrap(), &day).unwrap();
+    // 2026-10-15T00:00:00Z = 1_792_022_400.
+    let midnight = 1_792_022_400;
+    for now in [midnight, midnight + 1, midnight + 43_200, midnight + 86_399] {
+        assert_eq!(
+            daily.public_key().expiry_for(now).unwrap(),
+            midnight + 2 * 86_400
+        );
+    }
+    assert_eq!(
+        daily.public_key().expiry_for(midnight + 86_400).unwrap(),
+        midnight + 3 * 86_400
+    );
     let key = key(&mut rng, "stamp-c");
     let public = key.public_key();
-    // At least half a cohort left: the current cohort's end.
-    assert_eq!(public.expiry_for(1_000_200).unwrap(), 1_000_800);
-    assert_eq!(public.expiry_for(1_000_500).unwrap(), 1_000_800);
-    assert_eq!(public.expiry_for(1_000_800).unwrap(), 1_001_400);
-    // Less than half left: the next cohort's end.
-    assert_eq!(public.expiry_for(1_000_501).unwrap(), 1_001_400);
-    assert_eq!(public.expiry_for(1_000_799).unwrap(), 1_001_400);
+    // Every issuance in one cohort gets the same expiry: the end of the next.
+    assert_eq!(public.expiry_for(3_600_000).unwrap(), EXPIRES);
+    assert_eq!(public.expiry_for(NOW).unwrap(), EXPIRES);
+    assert_eq!(public.expiry_for(3_603_599).unwrap(), EXPIRES);
+    assert_eq!(public.expiry_for(3_603_600).unwrap(), EXPIRES + COHORT);
     assert_eq!(public.expiry_for(0).err(), Some(Error::InvalidTimestamp));
     assert_eq!(
         public.expiry_for(TIME_LIMIT - 1).err(),
         Some(Error::InvalidTimestamp)
     );
     // Every issuer choice is accepted by verifiers for its whole life.
-    for now in [1_000_200, 1_000_501, 1_000_799, 1_000_800] {
+    for now in [3_600_000, NOW, 3_603_599, 3_603_600] {
         let expires = public.expiry_for(now).unwrap();
+        assert!(expires - now > COHORT);
+        assert!(expires - now <= 2 * COHORT);
         for t in [now, expires - 1] {
             public.check_expiry(expires, t).unwrap();
         }
@@ -685,20 +838,39 @@ fn cohort_rule_for_issuer_holder_and_verifier() {
         );
     }
     assert_eq!(
-        public.check_expiry(1_000_801, 1_000_200),
+        public.check_expiry(EXPIRES + 1, NOW),
         Err(Error::WrongExpiryCohort)
     );
     assert_eq!(
-        public.check_expiry(1_002_000, 1_000_200),
+        public.check_expiry(EXPIRES + COHORT, NOW),
         Err(Error::WrongExpiryCohort)
     );
     assert_eq!(
-        public.check_expiry(1_000_800, 0),
+        public.check_expiry(EXPIRES, 0),
         Err(Error::InvalidTimestamp)
     );
-    public.check_alignment(1_000_800).unwrap();
-    assert_eq!(public.check_alignment(1_000_801), Err(Error::InvalidStamp));
+    public.check_alignment(EXPIRES).unwrap();
+    assert_eq!(
+        public.check_alignment(EXPIRES + 1),
+        Err(Error::InvalidStamp)
+    );
     assert_eq!(public.check_alignment(0), Err(Error::InvalidTimestamp));
+    // Holder window: grid values from the request time to the answer time,
+    // each widened by the clock tolerance.
+    public.check_signed_expiry(EXPIRES, NOW, NOW).unwrap();
+    assert_eq!(
+        public.check_signed_expiry(EXPIRES + COHORT, NOW, NOW),
+        Err(Error::InvalidStamp)
+    );
+    public
+        .check_signed_expiry(EXPIRES + COHORT, NOW, NOW + COHORT)
+        .unwrap();
+    // A clock that stepped back between request and answer keeps the window.
+    public.check_signed_expiry(EXPIRES, NOW, NOW - 100).unwrap();
+    assert_eq!(
+        public.check_signed_expiry(EXPIRES, 1, 1),
+        Err(Error::InvalidStamp)
+    );
 }
 
 #[test]
@@ -718,8 +890,12 @@ fn keys_encode_validate_and_stay_apart_from_passport_keys() {
     assert_ne!(other.public_key(), public);
     let renamed = self::key(&mut rng, "stamp-k2");
     assert_ne!(renamed.public_key(), public);
-    let longer =
-        StampIssuerKey::generate(&mut rng, KeyId::new("stamp-k").unwrap(), COHORT + 60).unwrap();
+    let longer = StampIssuerKey::generate(
+        &mut rng,
+        KeyId::new("stamp-k").unwrap(),
+        &StampParams::new(2 * COHORT).unwrap(),
+    )
+    .unwrap();
     assert_ne!(longer.public_key(), public);
     // Zero secret and out-of-range cohort encodings are refused.
     let mut bytes = key.to_secret_bytes().to_vec();
@@ -729,13 +905,23 @@ fn keys_encode_validate_and_stay_apart_from_passport_keys() {
         StampIssuerKey::from_secret_bytes(&bytes).err(),
         Some(Error::InvalidKey)
     );
-    let mut bytes = public.to_bytes();
+    // Published keys and stored issuer keys finer than an hour, off the
+    // hour grid or longer than a day are refused.
     let cohort_at = 6 + 4 + "stamp-k".len();
-    bytes[cohort_at..cohort_at + 8].copy_from_slice(&59u64.to_be_bytes());
-    assert_eq!(
-        StampPublicKey::from_bytes(&bytes).err(),
-        Some(Error::InvalidStamp)
-    );
+    for bad in [59u64, 60, 3_599, 5_400, 5 * 3_600, 2 * 86_400] {
+        let mut bytes = public.to_bytes();
+        bytes[cohort_at..cohort_at + 8].copy_from_slice(&bad.to_be_bytes());
+        assert_eq!(
+            StampPublicKey::from_bytes(&bytes).err(),
+            Some(Error::InvalidStamp)
+        );
+        let mut bytes = key.to_secret_bytes().to_vec();
+        bytes[cohort_at..cohort_at + 8].copy_from_slice(&bad.to_be_bytes());
+        assert_eq!(
+            StampIssuerKey::from_secret_bytes(&bytes).err(),
+            Some(Error::InvalidStamp)
+        );
+    }
     // Same key ID and secret derivation domain never yield passport generators.
     let passport = IssuerKey::generate(&mut rng, KeyId::new("stamp-k").unwrap(), vec![]).unwrap();
     assert_ne!(
@@ -781,20 +967,28 @@ fn every_stamp_encoding_is_strict() {
         key.public_key(),
         &nonce,
         &[digest(&secret, &s, &a)],
+        NOW,
     )
     .unwrap();
     let blind = key
         .issue_blind(&mut rng, &request, &nonce, EPOCH, NOW)
         .unwrap();
     let pending_bytes = pending.to_bytes();
-    let stamp = pending.finish(&blind).unwrap();
-    let presentation = stamp.present(&mut rng, &s, &a).unwrap();
+    let stamp = pending.finish(&secret, &blind, NOW).unwrap();
+    let presentation = stamp.present(&mut rng, &secret, &s, &a).unwrap();
+    let mut state = StampState {
+        pending: Some(PendingStamp::from_bytes(&pending_bytes).unwrap()),
+        ..StampState::default()
+    };
+    state.stamps.push(stamp.clone());
+    let state_bytes = state.to_bytes();
     assert_strict(&key.public_key().to_bytes(), StampPublicKey::from_bytes);
     assert_strict(&key.to_secret_bytes(), StampIssuerKey::from_secret_bytes);
     assert_strict(&request.to_bytes(), StampIssuanceRequest::from_bytes);
     assert_strict(&blind.to_bytes(), BlindStamp::from_bytes);
     assert_strict(&pending_bytes, PendingStamp::from_bytes);
-    assert_strict(&stamp.to_bytes(), Stamp::from_bytes);
+    assert_strict(&stamp.to_bytes(), |b| Stamp::from_bytes(b, &secret));
+    assert_strict(&state_bytes, |b| StampState::from_bytes(b, &secret));
     assert_strict(&presentation.to_bytes(), StampPresentation::from_bytes);
 
     // Identity commitment or tag.
@@ -851,16 +1045,42 @@ fn every_stamp_encoding_is_strict() {
         StampPresentation::from_bytes(&bytes).err(),
         Some(Error::Decode("noncanonical proof"))
     );
-    // Zero holder secrets are refused on restore.
-    let mut zero = pending_bytes.to_vec();
-    zero[10..42].fill(0);
+    // A stamp restores only for its own holder: the signature covers the
+    // secret, which the encoding does not carry.
+    let other = HolderSecret::generate(&mut rng);
     assert_eq!(
-        PendingStamp::from_bytes(&zero).err(),
+        Stamp::from_bytes(&stamp.to_bytes(), &other).err(),
+        Some(Error::InvalidSignature)
+    );
+    assert_eq!(
+        StampState::from_bytes(&state_bytes, &other).err(),
+        Some(Error::InvalidSignature)
+    );
+    assert_eq!(
+        Stamp::from_bytes(&stamp.to_bytes(), &HolderSecret(Fr::from(0u64))).err(),
         Some(Error::InvalidKey)
     );
-    let mut zero = stamp.to_bytes().to_vec();
-    zero[10..42].fill(0);
-    assert_eq!(Stamp::from_bytes(&zero).err(), Some(Error::InvalidKey));
+    // A pending request with an invalid start time, an empty state, or more
+    // stamps than a holder retains are refused.
+    let mut zero_time = pending_bytes.to_vec();
+    let at = zero_time.len() - 8;
+    zero_time[at..].fill(0);
+    assert_eq!(
+        PendingStamp::from_bytes(&zero_time).err(),
+        Some(Error::InvalidTimestamp)
+    );
+    assert_eq!(
+        StampState::from_bytes(&StampState::default().to_bytes(), &secret).err(),
+        Some(Error::InvalidSealedHolder)
+    );
+    let mut full = StampState::default();
+    for _ in 0..=MAX_HELD_STAMPS {
+        full.stamps.push(stamp.clone());
+    }
+    assert_eq!(
+        StampState::from_bytes(&full.to_bytes(), &secret).err(),
+        Some(Error::InvalidSealedHolder)
+    );
     // Passport objects never decode as stamp objects.
     assert!(StampPresentation::from_bytes(&request.to_bytes()).is_err());
 }
@@ -934,7 +1154,7 @@ fn digest_known_answers_and_typed_inputs() {
 }
 
 #[tokio::test]
-async fn wallet_issuance_binds_member_tag_and_single_use_nonce() {
+async fn wallet_issuance_binds_member_tag_confirmation_and_single_use_nonce() {
     let mut rng = StdRng::seed_from_u64(12);
     let store = MemoryStore::new(CommunityId::new("wallet").unwrap(), 20).unwrap();
     let key = key(&mut rng, "stamp-w");
@@ -975,46 +1195,82 @@ async fn wallet_issuance_binds_member_tag_and_single_use_nonce() {
             .await
         }
     };
+    // The wallet's verified user verification must cover this request.
+    let confirmed = |auth: &AuthenticatedStampIssuance, request: &StampIssuanceRequest| {
+        auth.clone()
+            .with_user_verification(request.confirmation_challenge(&nonce))
+    };
     let (request, pending) =
-        request_stamp(&mut rng, &secret, key.public_key(), &nonce, &d).unwrap();
-    // Wrong member, session or tag: the nonce binding does not match.
+        request_stamp(&mut rng, &secret, key.public_key(), &nonce, &d, 90).unwrap();
+    // Wrong member or session: the nonce binding does not match.
     for wrong in [
         AuthenticatedStampIssuance::new([3; 32], [2; 32], secret.issuer_tag()),
         AuthenticatedStampIssuance::new([1; 32], [3; 32], secret.issuer_tag()),
     ] {
         assert_eq!(
-            once(request.clone(), wrong, 90).await.err(),
+            once(request.clone(), confirmed(&wrong, &request), 90)
+                .await
+                .err(),
             Some(Error::InvalidChallenge)
         );
     }
+    let ok = confirmed(&auth, &request);
     assert_eq!(
-        once(request.clone(), auth.clone(), 101).await.err(),
+        once(request.clone(), ok.clone(), 101).await.err(),
         Some(Error::InvalidChallenge)
     );
     assert_eq!(
-        once(request.clone(), auth.clone(), 0).await.err(),
+        once(request.clone(), ok.clone(), 0).await.err(),
         Some(Error::InvalidTimestamp)
     );
     // A request from another secret carries another tag.
     let other = HolderSecret::generate(&mut rng);
-    let (foreign, _) = request_stamp(&mut rng, &other, key.public_key(), &nonce, &d).unwrap();
+    let (foreign, _) = request_stamp(&mut rng, &other, key.public_key(), &nonce, &d, 90).unwrap();
     assert_eq!(
-        once(foreign, auth.clone(), 90).await.err(),
+        once(foreign.clone(), confirmed(&auth, &foreign), 90)
+            .await
+            .err(),
         Some(Error::IssuerTagMismatch)
     );
+    // No user verification, one over another request, over another nonce, or
+    // a device-chosen value: refused before any proof work.
+    let (again, _) = request_stamp(&mut rng, &secret, key.public_key(), &nonce, &d, 90).unwrap();
+    for unconfirmed in [
+        auth.clone(),
+        confirmed(&auth, &again),
+        auth.clone().with_user_verification(
+            request.confirmation_challenge(&IssuanceChallenge::from_bytes([0; 32])),
+        ),
+        auth.clone().with_user_verification([0; 32]),
+    ] {
+        assert_eq!(
+            once(request.clone(), unconfirmed, 90).await.err(),
+            Some(Error::UnconfirmedStampRequest)
+        );
+    }
     // The member's tag on a commitment to another secret fails the proof.
     let slots = [Fr::from(5u64); STAMP_SLOTS];
-    let (mixed, _) =
-        request_for_slots(&mut rng, &other, &secret, key.public_key(), &nonce, &slots).unwrap();
+    let (mixed, _) = request_for_slots(
+        &mut rng,
+        &other,
+        &secret,
+        key.public_key(),
+        &nonce,
+        &slots,
+        90,
+    )
+    .unwrap();
     assert_eq!(
-        once(mixed, auth.clone(), 90).await.err(),
+        once(mixed.clone(), confirmed(&auth, &mixed), 90)
+            .await
+            .err(),
         Some(Error::InvalidIssuanceRequest)
     );
     // Refusals consumed nothing; success consumes the nonce once.
-    let blind = once(request.clone(), auth.clone(), 90).await.unwrap();
-    pending.finish(&blind).unwrap();
+    let blind = once(request.clone(), ok.clone(), 90).await.unwrap();
+    pending.finish(&secret, &blind, 90).unwrap();
     assert_eq!(
-        once(request.clone(), auth.clone(), 90).await.err(),
+        once(request.clone(), ok.clone(), 90).await.err(),
         Some(Error::InvalidChallenge)
     );
     // Withdrawal of an outstanding nonce.
@@ -1030,6 +1286,10 @@ async fn wallet_issuance_binds_member_tag_and_single_use_nonce() {
         !revoke_stamp_issuance_challenge(&store, key.public_key(), &auth, &spare, 90)
             .await
             .unwrap()
+    );
+    assert_eq!(
+        Error::UnconfirmedStampRequest.to_string(),
+        "stamp request not covered by the user verification"
     );
 }
 
@@ -1052,7 +1312,8 @@ async fn stamp_tag_registry_is_separate_and_immutable() {
                 .await
                 .unwrap();
             let (request, _) =
-                request_stamp(&mut rng, &secret, key.public_key(), &nonce, &d).unwrap();
+                request_stamp(&mut rng, &secret, key.public_key(), &nonce, &d, 90).unwrap();
+            let auth = auth.with_user_verification(request.confirmation_challenge(&nonce));
             issue_stamp_once(&mut rng, &store, key, &auth, &request, &nonce, EPOCH, 90).await
         }
     };
@@ -1123,16 +1384,30 @@ async fn ledger_records_each_digest_once_until_the_cohort_ends() {
         StampLedger::new(
             store.clone(),
             *scope.fingerprint(),
-            vec![key.public_key().clone(), key.public_key().clone()]
+            vec![key.public_key().clone(), key.public_key().clone()],
+            params(),
         )
         .err()
         .map(|e| e.to_string()),
         Some("duplicate key ID in key ring".into())
     );
+    // A key whose cohort is not the rulebook's is refused for the ring.
+    let hourly_ring = vec![key.public_key().clone()];
+    assert_eq!(
+        StampLedger::new(
+            store.clone(),
+            *scope.fingerprint(),
+            hourly_ring,
+            StampParams::new(86_400).unwrap(),
+        )
+        .err(),
+        Some(Error::WrongExpiryCohort)
+    );
     let ledger = StampLedger::new(
         store.clone(),
         *scope.fingerprint(),
         vec![key.public_key().clone()],
+        params(),
     )
     .unwrap();
     assert_eq!(&ledger.scope(), scope);
@@ -1168,6 +1443,7 @@ async fn ledger_records_each_digest_once_until_the_cohort_ends() {
     let (other_scope, other_act) = &covered[1];
     let foreign = verify_stamp(
         &[key.public_key().clone()],
+        &params(),
         other_scope,
         EPOCH,
         other_act,
@@ -1188,9 +1464,35 @@ async fn ledger_records_each_digest_once_until_the_cohort_ends() {
         ledger.record(&verified, 0).await.err(),
         Some(Error::InvalidTimestamp)
     );
-    // The record outlives the stamp; pruning after expiry removes it.
+    // The record outlives the stamp by the prune margin: a node whose clock
+    // is up to that far behind still finds it, so it cannot apply the action
+    // twice; once the margin has passed, every such node refuses the stamp as
+    // expired anyway.
     assert_eq!(ledger.prune(EXPIRES).await.unwrap(), 0);
-    assert_eq!(ledger.prune(EXPIRES + 1).await.unwrap(), 1);
+    assert_eq!(ledger.prune(EXPIRES + 1).await.unwrap(), 0);
+    assert_eq!(
+        ledger
+            .prune(EXPIRES + STAMP_PRUNE_MARGIN_SECONDS)
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(ledger.recorded(&verified, EXPIRES).await.unwrap());
+    assert_eq!(
+        ledger.accept(act, &fresh, EPOCH, EXPIRES).await.err(),
+        Some(Error::StampExpired)
+    );
+    assert_eq!(
+        ledger
+            .prune(EXPIRES + STAMP_PRUNE_MARGIN_SECONDS + 1)
+            .await
+            .unwrap(),
+        1
+    );
+    // Early clock values prune nothing and invalid ones are refused.
+    assert_eq!(ledger.prune(STAMP_PRUNE_MARGIN_SECONDS).await.unwrap(), 0);
+    assert_eq!(ledger.prune(1).await.unwrap(), 0);
+    assert_eq!(ledger.prune(0).await.err(), Some(Error::InvalidTimestamp));
 }
 
 #[test]
@@ -1222,4 +1524,152 @@ fn new_errors_and_issuer_tags_have_stable_text_and_validation() {
         IssuerTag::from_bytes(&identity).err(),
         Some(Error::Decode("issuer tag"))
     );
+}
+
+/// Every encoding of `secret` the codecs could plausibly leak: the canonical
+/// little-endian scalar, its big-endian form and the legacy secret encoding.
+fn secret_forms(secret: &HolderSecret) -> Vec<Vec<u8>> {
+    let mut le = Vec::new();
+    secret.0.serialize_compressed(&mut le).unwrap();
+    let be: Vec<u8> = le.iter().rev().copied().collect();
+    vec![le, be, secret.to_bytes().to_vec()]
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+#[test]
+fn pending_stamp_stamp_and_state_encodings_carry_no_secret_bytes() {
+    for seed in 0..4u64 {
+        let mut rng = StdRng::seed_from_u64(300 + seed);
+        let key = key(&mut rng, "stamp-n");
+        let secret = HolderSecret::generate(&mut rng);
+        let covered = covered(&mut rng, 3);
+        let digests: Vec<StampDigest> =
+            covered.iter().map(|(s, a)| digest(&secret, s, a)).collect();
+        let nonce = IssuanceChallenge::generate(&mut rng);
+        let (request, pending) =
+            request_stamp(&mut rng, &secret, key.public_key(), &nonce, &digests, NOW).unwrap();
+        let pending_bytes = pending.to_bytes();
+        let blind = key
+            .issue_blind(&mut rng, &request, &nonce, EPOCH, NOW)
+            .unwrap();
+        let stamp = pending.finish(&secret, &blind, NOW).unwrap();
+        let (_, second) =
+            request_stamp(&mut rng, &secret, key.public_key(), &nonce, &digests, NOW).unwrap();
+        let mut state = StampState {
+            pending: Some(second),
+            ..StampState::default()
+        };
+        state.stamps.push(stamp.clone());
+        let blobs = [
+            pending_bytes.to_vec(),
+            stamp.to_bytes().to_vec(),
+            state.to_bytes().to_vec(),
+            request.to_bytes(),
+            blind.to_bytes(),
+        ];
+        for form in secret_forms(&secret) {
+            for blob in &blobs {
+                assert!(
+                    !contains(blob, &form),
+                    "seed {seed}: secret bytes in a stamp blob"
+                );
+            }
+        }
+        // What is stored suffices: the holder's secret restores and presents.
+        let restored = StampState::from_bytes(&state.to_bytes(), &secret).unwrap();
+        let (scope, act) = &covered[0];
+        let presentation = restored
+            .covering(&secret, scope, act, NOW)
+            .unwrap()
+            .present(&mut rng, &secret, scope, act)
+            .unwrap();
+        verify_one(&key, scope, act, &presentation).unwrap();
+        assert!(restored.pending.is_some());
+    }
+}
+
+#[test]
+fn slot_positions_are_uniform_and_fillers_fresh() {
+    // Chi-square over the position of each real digest among sixteen slots.
+    // 15 degrees of freedom: 37.70 is the 0.1 % critical value. The seeded
+    // RNG makes the run deterministic.
+    let mut rng = StdRng::seed_from_u64(16);
+    let digests: Vec<StampDigest> = (0..3u8).map(|n| StampDigest::from_bytes([n; 32])).collect();
+    let draws = 3_200;
+    let mut counts = [[0u32; STAMP_SLOTS]; 3];
+    let mut fillers = BTreeSet::new();
+    for _ in 0..draws {
+        let slots = shuffled_slots(&mut rng, &digests).unwrap();
+        for (d, digest) in digests.iter().enumerate() {
+            let at = slots.iter().position(|s| *s == digest.scalar()).unwrap();
+            counts[d][at] += 1;
+        }
+        for slot in slots.iter() {
+            if !digests.iter().any(|d| d.scalar() == *slot) {
+                let mut bytes = Vec::new();
+                slot.serialize_compressed(&mut bytes).unwrap();
+                assert!(fillers.insert(bytes), "filler repeated");
+            }
+        }
+    }
+    let expected = f64::from(draws) / STAMP_SLOTS as f64;
+    for per_digest in &counts {
+        let chi: f64 = per_digest
+            .iter()
+            .map(|&c| (f64::from(c) - expected).powi(2) / expected)
+            .sum();
+        assert!(chi < 37.70, "slot positions not uniform: chi-square {chi}");
+    }
+    assert_eq!(
+        fillers.len(),
+        draws as usize * (STAMP_SLOTS - digests.len())
+    );
+}
+
+#[test]
+fn stamp_and_passport_prove_the_same_pseudonym() {
+    let mut rng = StdRng::seed_from_u64(17);
+    let passport_key =
+        IssuerKey::generate(&mut rng, KeyId::new("passport").unwrap(), vec![]).unwrap();
+    let secret = HolderSecret::generate(&mut rng);
+    let challenge = IssuanceChallenge::generate(&mut rng);
+    let (request, pending) =
+        request_issue(&mut rng, &secret, passport_key.public_key(), &challenge).unwrap();
+    let blind = passport_key
+        .issue_blind(
+            &mut rng,
+            &request,
+            &challenge,
+            &PassportAttributes::new(NOW + 1_000, 7),
+        )
+        .unwrap();
+    let passport = pending.finish(&blind).unwrap();
+    let stamp_key = key(&mut rng, "stamp-p");
+    let covered = covered(&mut rng, 2);
+    let stamp = issue(&mut rng, &stamp_key, &secret, &covered);
+    for (scope, act) in &covered {
+        let request =
+            PresentationRequest::new(&mut rng, scope.community().clone(), 7, [], NOW).unwrap();
+        let shown = crate::presentation::present_checked(&mut rng, &passport, &request).unwrap();
+        let from_passport = verify(
+            &mut rng,
+            &[passport_key.public_key().clone()],
+            &request,
+            &shown,
+        )
+        .unwrap();
+        let from_stamp = verify_one(
+            &stamp_key,
+            scope,
+            act,
+            &stamp.present(&mut rng, scope, act).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(from_stamp.pseudonym(), &from_passport);
+    }
 }

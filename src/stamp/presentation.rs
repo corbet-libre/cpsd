@@ -13,10 +13,14 @@ use dock_crypto_utils::{
     transcript::{MerlinTranscript, Transcript},
 };
 use schnorr_pok::discrete_log::{PokDiscreteLog, PokDiscreteLogProtocol};
+use zeroize::Zeroizing;
 
-use super::{ActionKind, STAMP_SLOTS, Stamp, StampAction, StampDigest, StampPublicKey, StampScope};
+use super::{
+    ActionKind, STAMP_SLOTS, Stamp, StampAction, StampDigest, StampParams, StampPublicKey,
+    StampScope,
+};
 use crate::{
-    CommunityId, Error, KeyId, Pseudonym, Timestamp,
+    CommunityId, Error, HolderSecret, KeyId, Pseudonym, Timestamp,
     error::{ensure, redact},
     issuer::point_bytes,
     params::{
@@ -115,14 +119,17 @@ pub(crate) struct StampProof {
 /// does not hold the claimed digest) the result does not verify.
 pub(crate) fn prove<R: RngCore + CryptoRng>(
     rng: &mut R,
+    secret: &HolderSecret,
     stamp: &Stamp,
     request: &StampRequest,
     pseudonym: &G1Affine,
 ) -> Result<StampProof, Error> {
     let issuer = stamp.issuer();
     let revealed = request.revealed(issuer);
-    let messages = stamp.messages();
-    let blinding = Fr::rand(rng);
+    let messages = stamp.messages(secret);
+    // The shared blinding of the secret: with the public response it would
+    // yield the secret, so it is wiped on drop.
+    let blinding = Zeroizing::new(Fr::rand(rng));
     let signature = PoKOfSignatureG1Protocol::init(
         rng,
         &stamp.signature,
@@ -131,7 +138,10 @@ pub(crate) fn prove<R: RngCore + CryptoRng>(
             if revealed.contains_key(&index) {
                 MessageOrBlinding::RevealMessage(message)
             } else if index == IDX_SECRET {
-                MessageOrBlinding::BlindMessageWithConcreteBlinding { message, blinding }
+                MessageOrBlinding::BlindMessageWithConcreteBlinding {
+                    message,
+                    blinding: *blinding,
+                }
             } else {
                 MessageOrBlinding::BlindMessageRandomly(message)
             }
@@ -139,7 +149,7 @@ pub(crate) fn prove<R: RngCore + CryptoRng>(
     )
     .map_err(redact(Error::ProofGeneration))?;
     let base = params::community_base(&request.community);
-    let nym = PokDiscreteLogProtocol::init(stamp.secret.0, blinding, &base);
+    let nym = PokDiscreteLogProtocol::init(secret.0, *blinding, &base);
     let mut transcript = transcript(issuer, request);
     let mut bytes = Vec::new();
     signature
@@ -196,15 +206,16 @@ impl StampProof {
 
 pub(crate) fn present<R: RngCore + CryptoRng>(
     rng: &mut R,
+    secret: &HolderSecret,
     stamp: &Stamp,
     scope: &StampScope,
     slot: usize,
     digest: StampDigest,
 ) -> Result<StampPresentation, Error> {
-    let pseudonym = stamp.secret.pseudonym(scope.community());
+    let pseudonym = secret.pseudonym(scope.community());
     let request =
         StampRequest::with_challenge(scope.community(), stamp.epoch, stamp.expires, slot, digest);
-    let proof = prove(rng, stamp, &request, &pseudonym.point()?)?;
+    let proof = prove(rng, secret, stamp, &request, &pseudonym.point()?)?;
     Ok(StampPresentation {
         key_id: stamp.key_id().clone(),
         epoch: stamp.epoch,
@@ -377,16 +388,19 @@ impl core::fmt::Debug for VerifiedStamp {
 
 /// Verifies a stamp presentation for `action` in `scope`, purely and offline.
 ///
-/// `keys` is the authenticated stamp key ring; `epoch` the current stamp
-/// epoch; `now` the verifier's time. The digest is recomputed from the
-/// verifier's own fingerprint, the action and the presentation's pseudonym,
-/// and the proof shows that exactly this digest is signed into the revealed
-/// slot of a stamp whose hidden secret is that pseudonym's secret. The expiry
-/// must lie on the key's cohort grid, after `now` and at most two cohorts
-/// ahead. Returns the proven pseudonym with the action; this does NOT record
-/// the one use (see [`super::StampLedger`]).
+/// `keys` is the authenticated stamp key ring; `params` the rulebook's stamp
+/// settings; `epoch` the current stamp epoch; `now` the verifier's time. The
+/// digest is recomputed from the verifier's own fingerprint, the action and the
+/// presentation's pseudonym, and the proof shows that exactly this digest is
+/// signed into the revealed slot of a stamp whose hidden secret is that
+/// pseudonym's secret. The signing key must use the configured cohort, and the
+/// expiry must lie on that cohort grid, after `now` and at most two cohorts
+/// (plus the clock tolerance) ahead; anything else is
+/// [`Error::WrongExpiryCohort`]. Returns the proven pseudonym with the action;
+/// this does NOT record the one use (see [`super::StampLedger`]).
 pub fn verify_stamp(
     keys: &[StampPublicKey],
+    params: &StampParams,
     scope: &StampScope,
     epoch: u64,
     action: &StampAction,
@@ -397,6 +411,7 @@ pub fn verify_stamp(
     let issuer = matching.next().ok_or(Error::UnknownKey)?;
     ensure(matching.next().is_none(), Error::DuplicateKeyId)?;
     ensure(presentation.epoch == epoch, Error::WrongEpoch)?;
+    ensure(issuer.params() == *params, Error::WrongExpiryCohort)?;
     issuer.check_expiry(presentation.expires, now)?;
     let digest = action.digest(scope.fingerprint(), &presentation.pseudonym);
     let request = StampRequest::with_challenge(
