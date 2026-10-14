@@ -15,6 +15,7 @@ touch "$GITHUB_PATH"
 python3 .github/check-first-party.py
 # check gate (ci.yml check job).
 rustc --version
+bash .ci/update-our-crates.sh
 cargo fmt --all --check
 node --test .github/check-pins.test.mjs
 cargo metadata --locked --format-version 1 > dependency-metadata.json
