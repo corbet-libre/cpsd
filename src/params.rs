@@ -4,7 +4,8 @@
 //! domain-separated label to G1/G2 (docknetwork's try-and-increment
 //! hash-to-curve, cofactor cleared), so nobody knows discrete-log relations
 //! between them. Nothing in this module handles secrets except
-//! [`passport_messages`], which assembles the signed message vector.
+//! [`passport_messages`] and [`stamp_messages`], which assemble the signed
+//! message vectors.
 
 use std::sync::OnceLock;
 
@@ -17,7 +18,7 @@ use bulletproofs_plus_plus::setup::SetupParams as BppSetupParams;
 use dock_crypto_utils::hashing_utils::{affine_group_elem_from_try_and_incr, hash_to_field};
 use zeroize::Zeroizing;
 
-use crate::{CommunityId, GateId, KeyId, PassportAttributes};
+use crate::{CommunityId, GateId, KeyId, PassportAttributes, Timestamp};
 
 /// The pairing-friendly curve (BLS12-381).
 pub(crate) type Curve = Bls12_381;
@@ -43,7 +44,44 @@ pub(crate) const IDX_FIRST_GATE: usize = 5;
 
 /// Number of signed messages for a catalogue of `gate_count` gates.
 pub(crate) fn message_count(gate_count: usize) -> usize {
-    IDX_FIRST_GATE + gate_count
+    Layout::Passport { gates: gate_count }.message_count()
+}
+
+// ---------------------------------------------------------------------------
+// Message layout of the BBS+ confirmation-stamp signature (stamp format v1).
+// The secret and key-ID positions equal the passport's; nothing else is shared.
+// ---------------------------------------------------------------------------
+
+/// Number of digest slots in every stamp, used or not.
+pub(crate) const STAMP_SLOTS: usize = 16;
+/// Stamp policy epoch; revealed in presentations.
+pub(crate) const STAMP_IDX_EPOCH: usize = 2;
+/// Exclusive end of the stamp's expiry cohort; revealed in presentations.
+pub(crate) const STAMP_IDX_EXPIRY: usize = 3;
+/// First digest slot. Slot `STAMP_IDX_FIRST_SLOT + i` holds an action digest
+/// or a random filler; hidden from the issuer, one slot revealed per presentation.
+pub(crate) const STAMP_IDX_FIRST_SLOT: usize = 4;
+
+/// The signed message layouts of cpsd credentials. Every layout keeps the
+/// holder secret at [`IDX_SECRET`] and the key-ID scalar at [`IDX_KEY_ID`].
+#[derive(Clone, Copy)]
+pub(crate) enum Layout {
+    /// Passport v1: secret, key ID, epoch, valid-until, revocation handle and
+    /// one expiry slot per catalogue gate.
+    Passport { gates: usize },
+    /// Stamp v1: secret, key ID, epoch, expiry cohort and [`STAMP_SLOTS`]
+    /// digest slots.
+    Stamp,
+}
+
+impl Layout {
+    /// Number of signed messages (one BBS+ generator `h_i` each).
+    pub(crate) fn message_count(self) -> usize {
+        match self {
+            Layout::Passport { gates } => IDX_FIRST_GATE + gates,
+            Layout::Stamp => STAMP_IDX_FIRST_SLOT + STAMP_SLOTS,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +93,8 @@ const DOMAIN_KEY_ID: &[u8] = b"cpsd/v1/key-id";
 const DOMAIN_COMMUNITY_BASE: &[u8] = b"cpsd/v1/community-pseudonym-base";
 const DOMAIN_ISSUER_TAG_BASE: &[u8] = b"cpsd/v1/issuer-tag-base";
 const DOMAIN_RANGE_PROOF: &[u8] = b"cpsd/v1/bulletproofs-plus-plus-range-proof";
+const DOMAIN_STAMP_SIGNATURE_PARAMS: &[u8] = b"cpsd/stamp/v1/bbs-plus-signature-params";
+const DOMAIN_STAMP_SLOT: &[u8] = b"cpsd/stamp/v1/digest-slot";
 
 /// Unambiguous byte string builder for labels and proof contexts: every
 /// variable-length field is length-prefixed.
@@ -92,10 +132,28 @@ pub(crate) fn signature_params(key_id: &KeyId, gates: &[GateId]) -> SignaturePar
     for gate in gates {
         label.bytes(gate.as_str().as_bytes());
     }
-    SignatureParamsG1::<Curve>::new::<Blake2b512>(
-        &label.finish(),
-        message_count(gates.len()) as u32,
-    )
+    generators(&label.finish(), Layout::Passport { gates: gates.len() })
+}
+
+/// BBS+ signature parameters of a stamp issuer key, hashed from the key ID in
+/// a domain of their own: a stamp key never shares generators with a passport
+/// key, even under the same key ID.
+pub(crate) fn stamp_signature_params(key_id: &KeyId) -> SignatureParamsG1<Curve> {
+    let mut label = Label::new(DOMAIN_STAMP_SIGNATURE_PARAMS);
+    label.bytes(key_id.as_str().as_bytes());
+    label.u64(STAMP_SLOTS as u64);
+    generators(&label.finish(), Layout::Stamp)
+}
+
+/// Dock's hash-to-curve generators `g1`, `g2`, `h_0` and one `h_i` per message.
+fn generators(label: &[u8], layout: Layout) -> SignatureParamsG1<Curve> {
+    SignatureParamsG1::<Curve>::new::<Blake2b512>(label, layout.message_count() as u32)
+}
+
+/// A 256-bit action digest as the scalar signed into (and revealed from) one
+/// stamp slot. The 512-bit hash reduction keeps the bias negligible.
+pub(crate) fn stamp_slot_scalar(digest: &[u8; 32]) -> Fr {
+    hash_to_field::<Fr, Blake2b512>(DOMAIN_STAMP_SLOT, digest)
 }
 
 /// The key ID as a signed (and revealed) message.
@@ -160,5 +218,23 @@ pub(crate) fn passport_messages(
             m[IDX_FIRST_GATE + i] = Fr::from(*expires);
         }
     }
+    m
+}
+
+/// The full signed message vector of a stamp. Contains the holder secret and
+/// the hidden digest slots, hence wiped on drop.
+pub(crate) fn stamp_messages(
+    secret: &Fr,
+    key_id: &KeyId,
+    epoch: u64,
+    expires: Timestamp,
+    slots: &[Fr; STAMP_SLOTS],
+) -> Zeroizing<Vec<Fr>> {
+    let mut m = Zeroizing::new(vec![Fr::zero(); Layout::Stamp.message_count()]);
+    m[IDX_SECRET] = *secret;
+    m[IDX_KEY_ID] = key_id_scalar(key_id);
+    m[STAMP_IDX_EPOCH] = Fr::from(epoch);
+    m[STAMP_IDX_EXPIRY] = Fr::from(expires);
+    m[STAMP_IDX_FIRST_SLOT..].copy_from_slice(slots);
     m
 }

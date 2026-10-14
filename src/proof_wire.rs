@@ -55,7 +55,7 @@ impl Reader<'_> {
     }
 }
 
-fn decode<T: CanonicalDeserialize + CanonicalSerialize>(raw: &[u8]) -> Result<T, Error> {
+pub(crate) fn decode<T: CanonicalDeserialize + CanonicalSerialize>(raw: &[u8]) -> Result<T, Error> {
     let mut field = raw;
     let value = T::deserialize_compressed(&mut field).map_err(|_| Error::Decode("proof"))?;
     let mut canonical = Vec::with_capacity(raw.len());
@@ -84,11 +84,20 @@ pub(crate) fn well_formed(proof: &PresentationProof, ranges: usize) -> bool {
 }
 
 fn signature_shape(raw: &[u8]) -> Result<(), Error> {
+    signature_shape_with(raw, 4..=5 + MAX_GATES)
+}
+
+/// A complete BBS+ proof of knowledge whose second Schnorr response count lies
+/// in `responses` (hidden messages plus two).
+pub(crate) fn signature_shape_with(
+    raw: &[u8],
+    responses: core::ops::RangeInclusive<usize>,
+) -> Result<(), Error> {
     let mut c = Shape(raw);
     c.skip(5 * 48 + 2 * 32)?;
     c.literal(&[1])?; // Only complete responses; no optional partial map.
     let count = c.length()?;
-    if !(4..=5 + MAX_GATES).contains(&count) {
+    if !responses.contains(&count) {
         return Err(Error::Decode("signature responses"));
     }
     c.skip(count * 32)?;

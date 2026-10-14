@@ -83,11 +83,48 @@ pub trait IssuanceStore: ChallengeStore {
     ) -> impl Future<Output = Result<bool, Error>> + Send;
 }
 
+/// Proof-validated stamp issuance authorization, constructible only by cpsd.
+/// Store implementations must use all fields for an atomic compare-and-consume.
+pub struct VerifiedStampIssuance {
+    pub(crate) nonce: [u8; 32],
+    pub(crate) binding: [u8; 32],
+    pub(crate) now: Timestamp,
+    pub(crate) member: [u8; 32],
+    pub(crate) tag: crate::IssuerTag,
+}
+
+impl VerifiedStampIssuance {
+    /// Nonce, binding, current time, wallet member ID, and proven passport tag.
+    pub fn fields(&self) -> ([u8; 32], [u8; 32], Timestamp, [u8; 32], crate::IssuerTag) {
+        (self.nonce, self.binding, self.now, self.member, self.tag)
+    }
+}
+
+/// Stamp issuer store: the same atomic rule as [`IssuanceStore`] over a SEPARATE
+/// tag registry (member to passport tag), so stamp issuance never registers,
+/// compares or blocks passport tags. Register the member's first proven tag or
+/// compare with the existing one, refuse a tag held by another member, and
+/// consume the matching unexpired nonce in ONE transaction.
+pub trait StampIssuanceStore: ChallengeStore {
+    /// Atomic tag continuity and challenge consumption; false means invalid nonce.
+    fn consume_stamp_issuance(
+        &self,
+        issuance: VerifiedStampIssuance,
+    ) -> impl Future<Output = Result<bool, Error>> + Send;
+}
+
+/// One person-to-tag registry with its reverse (tag-owner) index.
+#[derive(Default)]
+struct TagRegistry {
+    tags: BTreeMap<[u8; 32], crate::IssuerTag>,
+    owners: BTreeMap<[u8; 48], [u8; 32]>,
+}
+
 #[derive(Default)]
 struct MemoryState {
     records: BTreeMap<[u8; 32], ChallengeRecord>,
-    tags: BTreeMap<[u8; 32], crate::IssuerTag>,
-    tag_owners: BTreeMap<[u8; 48], [u8; 32]>,
+    passport: TagRegistry,
+    stamp: TagRegistry,
 }
 
 /// In-memory implementation, also useful for a single-process ephemeral service.
@@ -184,9 +221,19 @@ impl ChallengeStore for MemoryStore {
     }
 }
 
-impl IssuanceStore for MemoryStore {
-    async fn consume_issuance(&self, issuance: VerifiedIssuance) -> Result<bool, Error> {
-        let (nonce, binding, now, person, tag) = issuance.fields();
+impl MemoryStore {
+    /// Shared atomic rule of both tag registries (see [`IssuanceStore`]).
+    fn consume_tagged(
+        &self,
+        registry: fn(&mut MemoryState) -> &mut TagRegistry,
+        (nonce, binding, now, person, tag): (
+            [u8; 32],
+            [u8; 32],
+            Timestamp,
+            [u8; 32],
+            crate::IssuerTag,
+        ),
+    ) -> Result<bool, Error> {
         check_timestamp(now)?;
         let mut state = self
             .state
@@ -199,20 +246,33 @@ impl IssuanceStore for MemoryStore {
         {
             return Ok(false);
         }
-        if state.tags.get(&person).is_some_and(|old| *old != tag) {
+        let tags = registry(&mut state);
+        if tags.tags.get(&person).is_some_and(|old| *old != tag) {
             return Err(Error::IssuerTagMismatch);
         }
-        if state
-            .tag_owners
+        if tags
+            .owners
             .get(&tag.to_bytes())
             .is_some_and(|old| *old != person)
         {
             return Err(Error::IssuerTagClaimed);
         }
-        state.tag_owners.insert(tag.to_bytes(), person);
-        state.tags.entry(person).or_insert(tag);
+        tags.owners.insert(tag.to_bytes(), person);
+        tags.tags.entry(person).or_insert(tag);
         state.records.remove(&nonce);
         Ok(true)
+    }
+}
+
+impl IssuanceStore for MemoryStore {
+    async fn consume_issuance(&self, issuance: VerifiedIssuance) -> Result<bool, Error> {
+        self.consume_tagged(|state| &mut state.passport, issuance.fields())
+    }
+}
+
+impl StampIssuanceStore for MemoryStore {
+    async fn consume_stamp_issuance(&self, issuance: VerifiedStampIssuance) -> Result<bool, Error> {
+        self.consume_tagged(|state| &mut state.stamp, issuance.fields())
     }
 }
 
@@ -247,6 +307,18 @@ pub mod libsql {
     /// operator reconciliation; migration fails rather than releasing a binding.
     pub const ISSUANCE_UNIQUENESS_SCHEMA: &str =
         "CREATE UNIQUE INDEX cpsd_issuer_tags_owner ON cpsd_issuer_tags(community_id, tag);";
+    /// The stamp issuer's member-to-passport-tag registry. Append as a NEW
+    /// migration after SCHEMA in the database of the stamp issuer; it is
+    /// separate from `cpsd_issuer_tags`, so stamps never touch passport tags.
+    pub const STAMP_ISSUANCE_SCHEMA: &str = "
+        CREATE TABLE cpsd_stamp_tags (
+            community_id TEXT NOT NULL,
+            member BLOB NOT NULL CHECK (length(member) = 32),
+            tag BLOB NOT NULL CHECK (length(tag) = 48),
+            PRIMARY KEY (community_id, member)
+        ) WITHOUT ROWID;
+        CREATE UNIQUE INDEX cpsd_stamp_tags_owner ON cpsd_stamp_tags (community_id, tag);
+    ";
     const TAG_OWNER: &str = "SELECT person FROM cpsd_issuer_tags WHERE tag = ?1";
     const MATCH: &str =
         "SELECT nonce FROM cpsd_challenges WHERE nonce = ?1 AND binding = ?2 AND expires >= ?3";
@@ -259,6 +331,28 @@ pub mod libsql {
     const CONSUME: &str =
         "DELETE FROM cpsd_challenges WHERE nonce = ?1 AND binding = ?2 AND expires >= ?3";
     const PRUNE: &str = "DELETE FROM cpsd_challenges WHERE expires < ?1";
+    const STAMP_TAG_OWNER: &str = "SELECT member FROM cpsd_stamp_tags WHERE tag = ?1";
+    const STAMP_TAG: &str = "SELECT tag FROM cpsd_stamp_tags WHERE member = ?1";
+    const STAMP_REGISTER_TAG: &str = "INSERT INTO cpsd_stamp_tags (member, tag) VALUES (?1, ?2)";
+
+    /// The three statements of one tag registry.
+    struct TagSql {
+        owner: &'static str,
+        tag: &'static str,
+        register: &'static str,
+    }
+
+    const PASSPORT_TAGS: TagSql = TagSql {
+        owner: TAG_OWNER,
+        tag: TAG,
+        register: REGISTER_TAG,
+    };
+
+    const STAMP_TAGS: TagSql = TagSql {
+        owner: STAMP_TAG_OWNER,
+        tag: STAMP_TAG,
+        register: STAMP_REGISTER_TAG,
+    };
 
     /// A fixed community capability using the official libSQL client via crlt.
     /// The caller owns database connections, migrations, credentials and routing.
@@ -315,12 +409,25 @@ pub mod libsql {
         /// Check global issuance query plans, including the challenge queries.
         /// Requires SCHEMA and ISSUANCE_SCHEMA in the global issuer database.
         pub async fn check_issuance_indexes(&self) -> Result<(), Error> {
+            self.check_tag_indexes(&PASSPORT_TAGS).await
+        }
+
+        /// Check stamp issuance query plans, including the challenge queries.
+        /// Requires SCHEMA and STAMP_ISSUANCE_SCHEMA in the stamp issuer database.
+        pub async fn check_stamp_issuance_indexes(&self) -> Result<(), Error> {
+            self.check_tag_indexes(&STAMP_TAGS).await
+        }
+
+        async fn check_tag_indexes(&self, registry: &TagSql) -> Result<(), Error> {
             self.check_indexes().await?;
             let person = crlt::Value::Blob(vec![0; 32]);
             for (sql, args) in [
-                (TAG, vec![person.clone()]),
-                (TAG_OWNER, vec![crlt::Value::Blob(vec![0; 48])]),
-                (REGISTER_TAG, vec![person, crlt::Value::Blob(vec![0; 48])]),
+                (registry.tag, vec![person.clone()]),
+                (registry.owner, vec![crlt::Value::Blob(vec![0; 48])]),
+                (
+                    registry.register,
+                    vec![person, crlt::Value::Blob(vec![0; 48])],
+                ),
             ] {
                 self.db
                     .explain(sql, args)
@@ -414,7 +521,32 @@ pub mod libsql {
     }
     impl IssuanceStore for LibsqlStore {
         async fn consume_issuance(&self, issuance: VerifiedIssuance) -> Result<bool, Error> {
-            let (nonce, binding, now, person, tag) = issuance.fields();
+            self.consume_tagged(&PASSPORT_TAGS, issuance.fields()).await
+        }
+    }
+
+    impl StampIssuanceStore for LibsqlStore {
+        async fn consume_stamp_issuance(
+            &self,
+            issuance: VerifiedStampIssuance,
+        ) -> Result<bool, Error> {
+            self.consume_tagged(&STAMP_TAGS, issuance.fields()).await
+        }
+    }
+
+    impl LibsqlStore {
+        /// Shared atomic rule of both tag registries (see [`IssuanceStore`]).
+        async fn consume_tagged(
+            &self,
+            registry: &TagSql,
+            (nonce, binding, now, person, tag): (
+                [u8; 32],
+                [u8; 32],
+                Timestamp,
+                [u8; 32],
+                crate::IssuerTag,
+            ),
+        ) -> Result<bool, Error> {
             check_timestamp(now)?;
             let mut tx = self
                 .db
@@ -430,7 +562,7 @@ pub mod libsql {
                 return finish_issuance_transaction(tx, 0).await;
             }
             let owners = tx
-                .query(TAG_OWNER, params![tag.to_bytes().to_vec()])
+                .query(registry.owner, params![tag.to_bytes().to_vec()])
                 .await
                 .map_err(crate::error::redact(Error::Storage))?;
             if let Some(owner) = owners.first()
@@ -442,7 +574,7 @@ pub mod libsql {
                 return Err(Error::IssuerTagClaimed);
             }
             let rows = tx
-                .query(TAG, params![person.to_vec()])
+                .query(registry.tag, params![person.to_vec()])
                 .await
                 .map_err(crate::error::redact(Error::Storage))?;
             if let Some(row) = rows.first() {
@@ -458,7 +590,7 @@ pub mod libsql {
                 }
             } else {
                 tx.execute(
-                    REGISTER_TAG,
+                    registry.register,
                     params![person.to_vec(), tag.to_bytes().to_vec()],
                 )
                 .await

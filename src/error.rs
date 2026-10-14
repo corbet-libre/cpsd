@@ -79,6 +79,14 @@ pub enum Error {
     IssuerTagClaimed,
     /// Bytes could not be decoded; the payload names the failing part.
     Decode(&'static str),
+    /// Stamp key, cohort setting, digest list, slot or scope check failed.
+    InvalidStamp,
+    /// The stamp does not carry the digest of this action.
+    StampDigestMissing,
+    /// The stamp's expiry cohort ended before the verifier's time.
+    StampExpired,
+    /// This action digest was already used in the community.
+    StampReplayed,
 }
 
 impl fmt::Display for Error {
@@ -118,6 +126,10 @@ impl fmt::Display for Error {
             Error::IssuerTagMismatch => f.write_str("issuer tag continuity failed"),
             Error::IssuerTagClaimed => f.write_str("issuer tag already claimed"),
             Error::Decode(what) => write!(f, "cannot decode {what}"),
+            Error::InvalidStamp => f.write_str("invalid confirmation stamp"),
+            Error::StampDigestMissing => f.write_str("stamp does not cover this action"),
+            Error::StampExpired => f.write_str("confirmation stamp expired"),
+            Error::StampReplayed => f.write_str("confirmation stamp digest already used"),
         }
     }
 }

@@ -31,7 +31,7 @@ impl Pseudonym {
     }
 
     pub(crate) fn point(&self) -> Result<G1Affine, Error> {
-        decode_point(&self.0)
+        decode_point(&self.0, "pseudonym")
     }
 
     /// Compressed G1 encoding (48 bytes).
@@ -42,7 +42,7 @@ impl Pseudonym {
     /// Validates a 48-byte pseudonym (canonical, in the prime-order subgroup,
     /// not the identity).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        let p = decode_point(bytes)?;
+        let p = decode_point(bytes, "pseudonym")?;
         Ok(Self::from_point(p))
     }
 
@@ -58,13 +58,15 @@ impl core::fmt::Debug for Pseudonym {
     }
 }
 
-fn decode_point(bytes: &[u8]) -> Result<G1Affine, Error> {
+/// A canonical compressed G1 point in the prime-order subgroup, not the
+/// identity; `what` names the field in the decode error.
+pub(crate) fn decode_point(bytes: &[u8], what: &'static str) -> Result<G1Affine, Error> {
     use ark_serialize::CanonicalDeserialize;
     let mut slice = bytes;
     let p = G1Affine::deserialize_compressed(&mut slice)
-        .map_err(crate::error::redact(Error::Decode("pseudonym")))?;
+        .map_err(crate::error::redact(Error::Decode(what)))?;
     if !crate::wire::canonical_encoding(slice, &point_bytes(&p), bytes) || p.is_zero() {
-        return Err(Error::Decode("pseudonym"));
+        return Err(Error::Decode(what));
     }
     Ok(p)
 }
