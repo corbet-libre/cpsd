@@ -41,6 +41,30 @@ consume challenges. Repeating the same valid proof against the same request
 will pass them. Single-use challenge state is required at the service boundary.
 Neither a holder-supplied time nor a holder-supplied key ring is authoritative.
 
+### Confirmation stamps
+
+A stamp is a second, short-lived blind credential for "one confirmation per
+device". It has its own key, generators, wire kinds (envelope version 4) and tag
+registry, and it never changes passport behaviour.
+
+1. The wallet holds a `StampIssuerKey` (cohort length = rulebook stamp
+   lifetime) and publishes its `StampPublicKey` in the stamp key ring.
+2. Per action, the device draws a `StampSalt` and computes the digest with
+   `StampAction::digest(fingerprint, pseudonym)`. It then calls `request_stamp`
+   with up to `STAMP_SLOTS` digests (random fillers, shuffled slots) against
+   the wallet's `stamp_issuance_challenge` nonce. One user verification signs
+   `StampIssuanceRequest::confirmation_challenge`.
+3. The wallet calls `issue_stamp_once` with an `AuthenticatedStampIssuance`
+   (member, session, the member's passport `IssuerTag`) and a store
+   implementing `StampIssuanceStore` (libSQL: `STAMP_ISSUANCE_SCHEMA`). The
+   device runs `PendingStamp::finish`.
+4. Per community, the device calls `Stamp::present(scope, action)`. The
+   community calls `StampLedger::accept`, which runs `verify_stamp` (pure,
+   offline, challenge = action digest) and then records the digest once.
+
+The security argument and its limits (no revocation, short lifetime) are in
+[STAMP-SECURITY.md](docs/STAMP-SECURITY.md).
+
 ## Dependency survey and choice
 
 Reviewed upstream sources and crates.io's index on 2026-09-30:

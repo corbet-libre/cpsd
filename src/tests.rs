@@ -1,5 +1,5 @@
-mod refusal_paths;
 mod proof_migration;
+mod refusal_paths;
 
 use crate::test_support::TestPresentation;
 use std::{collections::BTreeSet, time::Instant};

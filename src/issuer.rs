@@ -336,6 +336,15 @@ impl IssuerTag {
     pub fn to_bytes(&self) -> [u8; 48] {
         self.0
     }
+
+    /// Validates a stored tag (canonical, in the prime-order subgroup, not the
+    /// identity), for example to build an
+    /// [`AuthenticatedStampIssuance`](crate::AuthenticatedStampIssuance) from
+    /// the passport issuer's tag registry.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        let p = crate::presentation::decode_point(bytes, "issuer tag")?;
+        Ok(Self(point_bytes(&p)))
+    }
 }
 
 impl core::fmt::Debug for IssuerTag {

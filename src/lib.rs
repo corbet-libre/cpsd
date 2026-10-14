@@ -20,6 +20,11 @@
 //!   [`verify`] checks it and returns the pseudonym.
 //! - **Revocation (v1).** Validity period and policy epoch inside the
 //!   passport; see the crate README for the accumulator extension point (v2).
+//! - **Confirmation stamps.** A separate, short-lived blind credential under
+//!   its own issuer key ([`StampIssuerKey`]) that carries up to sixteen hidden
+//!   action digests and is presented one digest per community under the same
+//!   pseudonym ([`request_stamp`], [`Stamp::present`], [`verify_stamp`],
+//!   [`StampLedger`]); see `docs/STAMP-SECURITY.md`.
 //!
 //! Randomness is always supplied by the caller (`RngCore + CryptoRng`, the
 //! `rand` 0.8 traits re-exported as [`rand`]); in a browser seed a CSPRNG from
@@ -41,6 +46,7 @@ mod proof;
 mod proof_wire;
 mod root_board;
 mod session;
+mod stamp;
 pub mod storage;
 mod wire;
 
@@ -73,4 +79,14 @@ pub use session::{
     issue_blind_once, register_root_board_issuance, revoke_issuance_challenge,
     verify_stored_root_board_issuance,
 };
-pub use storage::{ChallengeRecord, ChallengeStore, IssuanceStore, MemoryStore, VerifiedIssuance};
+pub use stamp::{
+    ActionKind, AuthenticatedStampIssuance, BlindStamp, CommunityFingerprint, MAX_ACTION_KIND_LEN,
+    MAX_STAMP_COHORT_SECONDS, MIN_STAMP_COHORT_SECONDS, PayloadDigest, PendingStamp, STAMP_SLOTS,
+    Stamp, StampAction, StampDigest, StampIssuanceRequest, StampIssuerKey, StampLedger,
+    StampPresentation, StampPublicKey, StampSalt, StampScope, VerifiedStamp, issue_stamp_once,
+    request_stamp, revoke_stamp_issuance_challenge, stamp_issuance_challenge, verify_stamp,
+};
+pub use storage::{
+    ChallengeRecord, ChallengeStore, IssuanceStore, MemoryStore, StampIssuanceStore,
+    VerifiedIssuance, VerifiedStampIssuance,
+};

@@ -6,7 +6,7 @@ use rand::{CryptoRng, RngCore};
 
 mod root_issuance;
 
-fn binding(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
+pub(crate) fn binding(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
     let mut label = Label::new(domain);
     for field in fields {
         label.bytes(field);

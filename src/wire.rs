@@ -40,6 +40,13 @@ pub(crate) enum Kind {
     BlindRootBoardCredential = 17,
     RootBoardRequest = 18,
     RootBoardPresentation = 19,
+    StampPublicKey = 20,
+    StampIssuerKey = 21,
+    StampIssuanceRequest = 22,
+    BlindStamp = 23,
+    PendingStamp = 24,
+    Stamp = 25,
+    StampPresentation = 26,
 }
 
 impl Kind {
@@ -56,6 +63,16 @@ impl Kind {
             | Self::BlindRootBoardCredential
             | Self::RootBoardRequest
             | Self::RootBoardPresentation => 3,
+            // Confirmation stamps are a separate credential family: their own
+            // envelope version and kinds, so no passport object ever decodes
+            // as a stamp object or the reverse.
+            Self::StampPublicKey
+            | Self::StampIssuerKey
+            | Self::StampIssuanceRequest
+            | Self::BlindStamp
+            | Self::PendingStamp
+            | Self::Stamp
+            | Self::StampPresentation => 4,
             _ => 2,
         }
     }
