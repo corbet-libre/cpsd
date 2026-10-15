@@ -234,6 +234,19 @@ impl StampScope {
         }
     }
 
+    /// The stamp scope of a community. `founding` is the community fingerprint the
+    /// device pins and the server derives from its founding document; both come from
+    /// `csgn::community_fingerprint`. A community without a founding document is
+    /// named by `csgn::community_fingerprint(id, None)`. Every stamp scope of a
+    /// community is built here, so server and device agree.
+    pub fn of_community(community: CommunityId, founding: Option<&[u8; 32]>) -> Self {
+        let fingerprint = match founding {
+            Some(founding) => *founding,
+            None => csgn::community_fingerprint(community.as_bytes(), None),
+        };
+        Self::new(community, CommunityFingerprint::from_bytes(fingerprint))
+    }
+
     /// The pseudonym scope.
     pub fn community(&self) -> &CommunityId {
         &self.community
