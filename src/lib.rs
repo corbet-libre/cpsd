@@ -88,6 +88,6 @@ pub use stamp::{
     stamp_issuance_challenge, verify_stamp,
 };
 pub use storage::{
-    ChallengeRecord, ChallengeStore, IssuanceStore, MemoryStore, StampIssuanceStore,
+    ChallengeRecord, ChallengeStore, IssuanceStore, MemoryStore, PassportTags, StampIssuanceStore,
     VerifiedIssuance, VerifiedStampIssuance,
 };

@@ -113,6 +113,19 @@ pub trait StampIssuanceStore: ChallengeStore {
     ) -> impl Future<Output = Result<bool, Error>> + Send;
 }
 
+/// Read access to the passport issuer's person-to-tag registry, so the wallet
+/// can build an [`AuthenticatedStampIssuance`](crate::AuthenticatedStampIssuance)
+/// from the tag of the authenticated member's own passport. Never use a tag the
+/// device supplies.
+pub trait PassportTags {
+    /// The passport issuer tag registered for `person`; `None` before the
+    /// person's first passport issuance.
+    fn passport_tag(
+        &self,
+        person: [u8; 32],
+    ) -> impl Future<Output = Result<Option<crate::IssuerTag>, Error>> + Send;
+}
+
 /// One person-to-tag registry with its reverse (tag-owner) index.
 #[derive(Default)]
 struct TagRegistry {
@@ -267,6 +280,16 @@ impl MemoryStore {
 impl IssuanceStore for MemoryStore {
     async fn consume_issuance(&self, issuance: VerifiedIssuance) -> Result<bool, Error> {
         self.consume_tagged(|state| &mut state.passport, issuance.fields())
+    }
+}
+
+impl PassportTags for MemoryStore {
+    async fn passport_tag(&self, person: [u8; 32]) -> Result<Option<crate::IssuerTag>, Error> {
+        let state = self
+            .state
+            .lock()
+            .map_err(crate::error::redact(Error::Storage))?;
+        Ok(state.passport.tags.get(&person).copied())
     }
 }
 
@@ -522,6 +545,26 @@ pub mod libsql {
     impl IssuanceStore for LibsqlStore {
         async fn consume_issuance(&self, issuance: VerifiedIssuance) -> Result<bool, Error> {
             self.consume_tagged(&PASSPORT_TAGS, issuance.fields()).await
+        }
+    }
+
+    impl PassportTags for LibsqlStore {
+        async fn passport_tag(&self, person: [u8; 32]) -> Result<Option<crate::IssuerTag>, Error> {
+            let rows = self
+                .db
+                .query(TAG, params![person.to_vec()])
+                .await
+                .map_err(crate::error::redact(Error::Storage))?;
+            let Some(row) = rows.first() else {
+                return Ok(None);
+            };
+            match row
+                .get_value(0)
+                .map_err(crate::error::redact(Error::Storage))?
+            {
+                crlt::Value::Blob(bytes) => crate::IssuerTag::from_bytes(&bytes).map(Some),
+                _ => Err(Error::Storage),
+            }
         }
     }
 
