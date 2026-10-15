@@ -203,9 +203,9 @@ The library emits no request logs or login records.
 V1 accepts exactly the requested policy epoch and proves inclusive validity
 `verification_time <= expiry < 2^40`. Timestamp zero is forbidden so a missing
 gate cannot pass a range proof. The service enforces short validity and refuses
-renewal while the person is suspended. Bumping the epoch invalidates a cohort;
+renewal while the person is blocked. Bumping the epoch invalidates a cohort;
 individual early revocation is **not** implemented. The worst-case individual
-suspension delay is the remaining passport lifetime (up to one shared epoch).
+block delay is the remaining passport lifetime (up to one shared epoch).
 
 A hidden, signed random revocation handle reserves a future accumulator witness
 binding. V2 must add a Dock `vb_accumulator` nonmembership statement with a
@@ -243,7 +243,7 @@ then can the blind response escape. Concurrent first issuances with different
 secrets yield one winner; failed proofs or tag mismatches leave the nonce and
 existing tag unchanged. New sessions and rotated issuer keys keep the same tag.
 The caller authenticates sessions, assigns stable opaque person IDs, authorizes
-gates and enforces suspension. Never accept authentication IDs from request
+gates and enforces blocks. Never accept authentication IDs from request
 bodies or create a new person ID to bypass continuity.
 
 `ChallengeStore` is a small fixed-community capability with a cheap `matches`

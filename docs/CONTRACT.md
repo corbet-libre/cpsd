@@ -77,7 +77,7 @@ nonce/binding, registers the first issuer tag or requires the existing one,
 and consumes the nonce. Any mismatch rolls back; no signed answer is released
 before commit. Two competing first secrets cannot both win, even with distinct
 sessions/challenges. Same-secret renewal survives key rotation. Session
-validation, stable person assignment, gates and suspension belong to cgbl.
+validation, stable person assignment, gates and blocks belong to cgbl.
 
 `ChallengeStore` defines scoped reserve, cheap lookup, compare-and-delete and expiry pruning.
 `MemoryStore` and the native `storage::libsql::LibsqlStore` implement it. Native
@@ -114,7 +114,7 @@ storage binding remains v2. Accumulator revocation remains future work.
 The origin-to-community/key-ring mapping and the wallet code are trusted.
 Malicious delivered JavaScript/Wasm can exfiltrate the secret or bypass this
 API; signed scope checks protect an honest wallet against verifier substitution.
-Arkworks is not claimed constant-time in browsers. Individual suspension takes
+Arkworks is not claimed constant-time in browsers. An individual block takes
 effect by expiry/epoch refresh, up to the remaining shared epoch.
 
 All ark fields require validated decoding followed by exact canonical
@@ -132,7 +132,7 @@ rejects duplicate Corbet packages and floating transitive Git pins.
 Global issuance binds each verified issuer tag to exactly one stable authenticated
 person, as well as binding each person to one tag. Without the reverse constraint,
 a holder could use a second global account to renew the same community pseudonym
-after suspension. Both directions are checked with nonce consumption in cpsd's
+after a block. Both directions are checked with nonce consumption in cpsd's
 single transaction; rejected duplicate claims leave the nonce reusable by the
 proper independent holder. Bindings survive expiry and pruning forever.
 
