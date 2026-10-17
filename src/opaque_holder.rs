@@ -284,6 +284,32 @@ impl OpaqueHolder {
             .map(stamp::PendingStamp::issuer)
     }
 
+    /// The exact bytes of the pending stamp request when it carries every
+    /// action of `actions` (with this holder's own pseudonyms, as
+    /// [`begin_stamp`](Self::begin_stamp) computed them).
+    ///
+    /// A device interrupted after it sent the request sends these SAME bytes
+    /// again: the wallet answers the same request with the same blind stamp,
+    /// without a second confirmation, and [`finish_stamp`](Self::finish_stamp)
+    /// completes the kept request against the stamp key it was addressed to.
+    /// `None` when nothing is pending or the request was made for other actions.
+    pub fn pending_stamp_request(
+        &self,
+        actions: &[(StampScope, StampAction)],
+    ) -> Option<Vec<u8>> {
+        let digests: Vec<StampDigest> = actions
+            .iter()
+            .map(|(scope, action)| {
+                action.digest(scope.fingerprint(), &self.pseudonym(scope.community()))
+            })
+            .collect();
+        self.stamps
+            .pending
+            .as_ref()?
+            .request_covering(&digests)
+            .map(<[u8]>::to_vec)
+    }
+
     /// Whether an unexpired retained stamp approves `action` in `scope`.
     pub fn stamp_covers(&self, scope: &StampScope, action: &StampAction, now: Timestamp) -> bool {
         self.stamps

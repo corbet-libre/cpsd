@@ -195,6 +195,7 @@ pub(crate) fn request_for_slots<R: RngCore + CryptoRng>(
         blinding: *blinding,
         slots: *slots,
         issuer: issuer.clone(),
+        request: request.to_bytes(),
         begun: now,
     };
     Ok((request, pending))
@@ -387,9 +388,12 @@ impl core::fmt::Debug for BlindStamp {
 }
 
 /// Device state between [`request_stamp`] and the wallet's answer: the
-/// blinding factor, the shuffled slots, the stamp key and the time the request
-/// was made. It never contains the holder secret: the opaque holder supplies
-/// it at [`finish`](Self::finish). Wiped on drop; kept only inside
+/// blinding factor, the shuffled slots, the stamp key, the exact public request
+/// bytes, and the time the request was made.
+/// The request bytes are kept so a device interrupted after sending can send the
+/// SAME request again (the wallet answers it with the same stamp, without a new
+/// confirmation). It never contains the holder secret: the opaque holder
+/// supplies it at [`finish`](Self::finish). Wiped on drop; kept only inside
 /// [`crate::OpaqueHolder`] and its sealed state.
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub(crate) struct PendingStamp {
@@ -397,6 +401,7 @@ pub(crate) struct PendingStamp {
     slots: [Fr; STAMP_SLOTS],
     #[zeroize(skip)]
     issuer: StampPublicKey,
+    request: Vec<u8>,
     begun: Timestamp,
 }
 
@@ -432,6 +437,16 @@ impl PendingStamp {
         &self.issuer
     }
 
+    /// The exact request bytes as first sent, when this pending request carries
+    /// every one of `digests` in its slots.
+    pub(crate) fn request_covering(&self, digests: &[StampDigest]) -> Option<&[u8]> {
+        (!digests.is_empty()
+            && digests
+                .iter()
+                .all(|digest| self.slots.contains(&digest.scalar())))
+        .then_some(self.request.as_slice())
+    }
+
     /// Encoding for the holder's sealed state, without the holder secret.
     /// Wipes itself on drop.
     pub(crate) fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
@@ -441,6 +456,7 @@ impl PendingStamp {
             w.ark(slot);
         }
         self.issuer.encode_body(&mut w);
+        w.bytes(&self.request);
         w.u64(self.begun);
         w.finish_secret()
     }
@@ -451,6 +467,7 @@ impl PendingStamp {
         let blinding = r.ark::<Fr>("blinding")?;
         let slots = read_slots(&mut r)?;
         let issuer = StampPublicKey::decode_body(&mut r)?;
+        let request = r.bytes()?.to_vec();
         let begun = r.u64()?;
         r.finish()?;
         check_timestamp(begun)?;
@@ -458,6 +475,7 @@ impl PendingStamp {
             blinding,
             slots,
             issuer,
+            request,
             begun,
         })
     }

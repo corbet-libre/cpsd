@@ -161,9 +161,19 @@ fn stamp_state_survives_a_restart_and_never_repeats_the_secret() {
     assert_eq!(plain[5], Kind::OpaqueHolderWithStamps as u8);
     let mut restored = original.restored(&sealed).unwrap();
     assert_eq!(restored.pending_stamp_key(), Some(key.public_key()));
+    // The restarted device sends the SAME request bytes again (the wallet answers them
+    // again without a second confirmation); only for the actions they carry.
+    assert_eq!(
+        restored.pending_stamp_request(&[approval(1)]),
+        Some(request.to_bytes())
+    );
+    assert_eq!(restored.pending_stamp_request(&[approval(2)]), None);
+    assert_eq!(restored.pending_stamp_request(&[approval(1), approval(2)]), None);
+    assert_eq!(restored.pending_stamp_request(&[]), None);
     let blind = key.issue_blind(&mut rng, &request, &nonce, 1, now).unwrap();
     restored.finish_stamp(&blind, now).unwrap();
     assert_eq!(restored.pending_stamp_key(), None);
+    assert_eq!(restored.pending_stamp_request(&[approval(1)]), None);
     let second = IssuanceChallenge::generate(&mut rng);
     restored
         .begin_stamp(&mut rng, key.public_key(), &second, &[approval(2)], now)
