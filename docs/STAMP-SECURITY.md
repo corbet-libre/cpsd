@@ -343,7 +343,10 @@ and the tag registry change together or not at all.
   from the wallet's reply. A wallet that signs another epoch gets no stamp
   installed. The residual matches key-ID tagging: a wallet that also signs and
   serves one member a per-member status is caught only by parties that compare
-  it with the real publication.
+  it with the real publication. The expected epoch is only as trustworthy as
+  the signed global status: an operator that holds both the wallet and the
+  status signing key could still sign a per-member status, which the holder
+  alone cannot detect; only a comparison with the communities' views could.
 - **Replicas.** Two replicas that each accept a digest before they sync could
   both apply it. The design makes the same digest the same action, so action
   handlers must be idempotent per digest.
