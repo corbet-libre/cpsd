@@ -394,10 +394,11 @@ impl core::fmt::Debug for VerifiedStamp {
 /// presentation's pseudonym, and the proof shows that exactly this digest is
 /// signed into the revealed slot of a stamp whose hidden secret is that
 /// pseudonym's secret. The signing key must use the configured cohort, and the
-/// expiry must lie on that cohort grid, after `now` and at most two cohorts
-/// (plus the clock tolerance) ahead; anything else is
-/// [`Error::WrongExpiryCohort`]. Returns the proven pseudonym with the action;
-/// this does NOT record the one use (see [`super::StampLedger`]).
+/// expiry must lie on that cohort grid and at most two cohorts (plus the clock
+/// tolerance) ahead of `now`; a key with another cohort, an expiry off the
+/// grid or one further ahead is [`Error::WrongExpiryCohort`], and an expiry at
+/// or before `now` is [`Error::StampExpired`]. Returns the proven pseudonym with
+/// the action; this does NOT record the one use (see [`super::StampLedger`]).
 pub fn verify_stamp(
     keys: &[StampPublicKey],
     params: &StampParams,
