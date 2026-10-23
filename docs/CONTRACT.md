@@ -200,12 +200,14 @@ Source role authorization and atomic nonce consumption remain duties of the
 original service before signature release. This library supplies no admin role.
 
 The original root-board crypto, sealing, replay and hostile-composition tests are
-ported, with explicit cross-version codec regressions. They are authored; native
-and browser execution of this additive root-board stage remains unqualified.
+ported, with explicit cross-version codec regressions. CI runs them natively
+(`cargo test --locked` in `.ci/verify.sh` includes `tests/root_board.rs`). The CI
+browser leg runs only the `browser`, `opaque_holder`, `boundaries` and
+`stamp_vectors` test targets, so browser execution of this additive root-board
+stage remains unqualified.
 
-The preceding v2 baseline passed native Clippy, 75 Rust tests and six compile-fail
-doctests. The additive root-board stage still has source/format checks only; its
-native/browser tests have not executed and complete custody readiness is not claimed.
+On 2026-10-11 the preceding v2 baseline passed native Clippy, 75 Rust tests and
+six compile-fail doctests. Complete custody readiness is not claimed.
 
 
 ## Original lower Dock proof migration
@@ -224,5 +226,8 @@ scenarios and add original deterministic cross-target proof vectors and hostile
 compositions made from maintained primitives. The preserved source contained
 two old general-proof shape tests; these now exercise equivalent trailing-byte,
 missing-range, partial-signature and oversized-range refusal in the fixed v3
-codec. Source formatting has passed; compilation, browser execution and actual
-cross-target vector equality of this port remain unqualified.
+codec. CI checks the formatting, compiles and runs these tests natively
+(`.ci/verify.sh`). Its browser leg does not run `tests/proof_vectors.rs`, and the
+`CPSD_VECTOR` hashes that file prints are not compared across targets by any
+check, so browser execution of this port and actual cross-target vector equality
+remain unqualified.

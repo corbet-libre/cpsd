@@ -144,8 +144,9 @@ the digest, the BBS+ challenge contribution (every generator and every
 revealed value with its index) and the pseudonym statement. `verify_stamp` is
 pure. It selects the unique key ID in the ring and requires the expected
 epoch. It requires the key's cohort to be the configured `P` (the verifier's
-own rulebook value), `X ≡ 0 (mod P)` and `now < X ≤ now + 2P + δ`, and refuses
-anything else as `WrongExpiryCohort`. It then
+own rulebook value), `X ≡ 0 (mod P)` and `now < X ≤ now + 2P + δ`. It refuses
+an `X` off the grid or beyond `now + 2P + δ` as `WrongExpiryCohort` and an `X`
+at or before `now` as `StampExpired`. It then
 recomputes the digest from the verifier's own fingerprint, the action and the
 presented pseudonym, and verifies both proofs. It returns the proven
 pseudonym, never a caller-supplied one.
@@ -310,10 +311,13 @@ and the tag registry change together or not at all.
 - **Expiry as a correlator.** All stamps issued in one cohort carry the same
   `X`; the anonymity set and its residual risk are in section 4.4. A
   dishonest wallet could still pick among grid values to tag a holder. The
-  holder accepts only the values the issuer rule gives inside its issuance
-  window widened by `δ`: one value, or two when the request or answer lies
-  within `δ` of a cohort boundary or the answer arrives in a later cohort. So
-  the wallet gains at most about one bit for those stamps. Values off the grid
+  holder accepts only the grid values the issuer rule gives inside its
+  issuance window widened by `δ` that are still later than the answer time
+  (`StampPublicKey::check_signed_expiry`): one value, or two when the request
+  or answer lies within `δ` of a cohort boundary or the answer arrives in a
+  later cohort, or three when the answer lies within `δ` before the end of a
+  cohort and the request is about a cohort older or more. So the wallet gains
+  at most about log2(3) ≈ 1.6 bits for those stamps. Values off the grid
   or outside the window are refused at unblinding, and values outside
   `now < X ≤ now + 2P + δ` by every verifier. Fan-out should finish inside one
   cohort (design rule).

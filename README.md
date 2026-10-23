@@ -107,8 +107,10 @@ protocols directly. Shared message blindings and the original common Merlin
 challenge enforce the existing secret and expiry equalities. This removes the
 unrelated Circom/LegoGroth16/Wasmer dependency of the former general proof
 facade. No cryptographic primitive is reimplemented and no legacy exchange
-proof is accepted by changing its version. Existing holder state is retained;
-native/browser conformance of this port remains to be executed.
+proof is accepted by changing its version. Existing holder state is retained.
+CI runs the tests of this port natively; its browser leg does not run
+`tests/proof_vectors.rs`, so browser conformance of this port remains to be
+executed.
 
 ## Security decisions
 
