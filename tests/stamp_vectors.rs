@@ -73,7 +73,7 @@ fn stamp_v1_known_answers() {
         )
         .unwrap();
     let blind = key.issue_blind(&mut rng, &request, &nonce, 3, NOW).unwrap();
-    holder.finish_stamp(&blind, NOW).unwrap();
+    holder.finish_stamp(&blind, 3, NOW).unwrap();
     let presentation = holder
         .present_stamp(&mut rng, &scope, &action, NOW)
         .unwrap();

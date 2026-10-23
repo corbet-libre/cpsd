@@ -43,7 +43,7 @@ fn stamp(
         .begin_stamp(rng, key.public_key(), &nonce, approvals, now)
         .unwrap();
     let blind = key.issue_blind(rng, &request, &nonce, EPOCH, now).unwrap();
-    holder.finish_stamp(&blind, now).unwrap();
+    holder.finish_stamp(&blind, EPOCH, now).unwrap();
 }
 
 #[tokio::test]
@@ -70,7 +70,7 @@ async fn one_confirmation_approves_sixteen_communities_through_the_opaque_holder
     .await
     .unwrap();
     assert_eq!(blind.expires(), EXPIRES);
-    holder.finish_stamp(&blind, NOW).unwrap();
+    holder.finish_stamp(&blind, EPOCH, NOW).unwrap();
     for (scope, action) in &approvals {
         assert!(holder.stamp_covers(scope, action, NOW));
         let shown = holder.present_stamp(&mut rng, scope, action, NOW).unwrap();
@@ -111,7 +111,7 @@ fn holder_refuses_concurrent_missing_foreign_and_expired_stamp_operations() {
         .issue_blind(&mut rng, &elsewhere, &nonce, EPOCH, NOW)
         .unwrap();
     assert_eq!(
-        holder.finish_stamp(&unrequested, NOW).err(),
+        holder.finish_stamp(&unrequested, EPOCH, NOW).err(),
         Some(Error::NoPendingIssuance)
     );
     assert_eq!(
@@ -157,7 +157,7 @@ fn holder_refuses_concurrent_missing_foreign_and_expired_stamp_operations() {
         .issue_blind(&mut rng, &request, &nonce, EPOCH, NOW)
         .unwrap();
     assert_eq!(
-        holder.finish_stamp(&foreign, NOW).err(),
+        holder.finish_stamp(&foreign, EPOCH, NOW).err(),
         Some(Error::KeyMismatch)
     );
     assert_eq!(holder.pending_stamp_key(), None);
@@ -167,7 +167,7 @@ fn holder_refuses_concurrent_missing_foreign_and_expired_stamp_operations() {
         .issue_blind(&mut rng, &request_again, &nonce, EPOCH, NOW)
         .unwrap();
     assert_eq!(
-        holder.finish_stamp(&late, NOW).err(),
+        holder.finish_stamp(&late, EPOCH, NOW).err(),
         Some(Error::NoPendingIssuance)
     );
     // A retained stamp expires with its cohort.
@@ -229,4 +229,64 @@ fn holder_retains_at_most_eight_stamps_and_drops_expired_ones_first() {
     holder
         .present_stamp(&mut rng, &scope, &action, next)
         .unwrap();
+}
+
+/// X2 M1: every presentation reveals the stamp epoch, so a dishonest wallet that
+/// signs a per-member epoch tags the member for a colluding community. The holder
+/// accepts only the epoch of the authenticated global publication.
+#[tokio::test]
+async fn holder_refuses_a_signed_epoch_other_than_the_published_one() {
+    let mut rng = StdRng::seed_from_u64(77);
+    let key = StampIssuerKey::generate(&mut rng, KeyId::new("stamp").unwrap(), &params()).unwrap();
+    let mut holder = OpaqueHolder::from_seed(&mut [53; 32]);
+    // A stamp issued earlier under the published epoch stays through the attack.
+    stamp(&mut rng, &mut holder, &key, &[approval(1)], NOW);
+    let (kept_scope, kept_action) = approval(1);
+    assert!(holder.stamp_covers(&kept_scope, &kept_action, NOW));
+
+    // The tag: an epoch derived from the member, signed by the wallet, with a
+    // valid signature, key and expiry.
+    let tag_epoch = 0x6d65_6d62_6572_u64;
+    assert_ne!(tag_epoch, EPOCH);
+    let (scope, action) = approval(2);
+    let nonce = IssuanceChallenge::generate(&mut rng);
+    let request = holder
+        .begin_stamp(&mut rng, key.public_key(), &nonce, &[approval(2)], NOW)
+        .unwrap();
+    let tagged = key
+        .issue_blind(&mut rng, &request, &nonce, tag_epoch, NOW)
+        .unwrap();
+    assert_eq!(tagged.epoch(), tag_epoch);
+    assert_eq!(
+        holder.finish_stamp(&tagged, EPOCH, NOW).err(),
+        Some(Error::WrongEpoch)
+    );
+    // The attempt is consumed, the tagged stamp is not retained, the old one is.
+    assert_eq!(holder.pending_stamp_key(), None);
+    assert!(!holder.stamp_covers(&scope, &action, NOW));
+    assert_eq!(
+        holder.present_stamp(&mut rng, &scope, &action, NOW).err(),
+        Some(Error::StampDigestMissing)
+    );
+    assert!(holder.stamp_covers(&kept_scope, &kept_action, NOW));
+
+    // The check is the only guard: the same answer is a valid stamp for a
+    // holder that expected that epoch, and it would reveal it.
+    let mut other = OpaqueHolder::from_seed(&mut [54; 32]);
+    let request = other
+        .begin_stamp(&mut rng, key.public_key(), &nonce, &[approval(2)], NOW)
+        .unwrap();
+    let tagged = key
+        .issue_blind(&mut rng, &request, &nonce, tag_epoch, NOW)
+        .unwrap();
+    other.finish_stamp(&tagged, tag_epoch, NOW).unwrap();
+    let revealed = other.present_stamp(&mut rng, &scope, &action, NOW).unwrap();
+    assert_eq!(revealed.epoch(), tag_epoch);
+
+    // The honest answer under the published epoch is accepted and reveals it.
+    stamp(&mut rng, &mut holder, &key, &[approval(2)], NOW);
+    let shown = holder
+        .present_stamp(&mut rng, &scope, &action, NOW)
+        .unwrap();
+    assert_eq!(shown.epoch(), EPOCH);
 }

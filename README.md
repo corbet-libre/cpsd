@@ -61,7 +61,10 @@ registry, and it never changes passport behaviour.
 3. The wallet verifies that assertion, records its challenge with
    `AuthenticatedStampIssuance::with_user_verification` and calls
    `issue_stamp_once` with a store implementing `StampIssuanceStore` (libSQL:
-   `STAMP_ISSUANCE_SCHEMA`). The device runs `OpaqueHolder::finish_stamp`.
+   `STAMP_ISSUANCE_SCHEMA`). The device runs `OpaqueHolder::finish_stamp`
+   with the stamp epoch of the authenticated global publication (the signed
+   global status), never one taken from the wallet's reply; any other signed
+   epoch is refused with `Error::WrongEpoch`.
 4. Per community, the device calls `OpaqueHolder::present_stamp`. The
    community calls `StampLedger::accept` (key ring plus its own
    `StampParams`), which runs `verify_stamp` (pure, offline, challenge =
@@ -235,7 +238,11 @@ verification time is the **challenge deadline**, so a passport that expires
 while its proof is being made cannot slip through. Supply the current
 authoritative epoch and time at verification. Only a successful atomic consume
 returns the pseudonym. Invalid proofs leave the challenge available; concurrent
-valid proofs produce at most one success. Issue through `issuance_challenge`
+valid proofs produce at most one success. In the independent-expiry profile the
+holder refuses a signed request whose deadline lies more than
+`MAX_REQUEST_AHEAD_SECONDS` (five minutes) after its own clock; otherwise a
+community could probe the hidden expiries by signing far-future deadlines and
+watching whether the holder answers. Issue through `issuance_challenge`
 and `issue_blind_once` for the analogous issuance replay boundary. Pass an `AuthenticatedIssuance` with the authenticated opaque global person ID
 and session ID to **both** functions. The challenge digest binds both IDs and
 the full issuer key. `issue_blind_once` rejects an absent/expired/mismatched
@@ -273,7 +280,9 @@ on renewal/key rotation. This is necessary uniqueness state, held only in the
 global DB, never published to communities. No community pseudonym, proof, raw
 request, issued-at/used-at date, or history table is stored.
 Successful consumption deletes the row; call `prune` regularly for expired
-pending rows. The service must limit challenge lifetimes, rate and capacity.
+pending rows. Stamp one-use records live in the same store: their stored
+deadline is `X + STAMP_PRUNE_MARGIN_SECONDS`, so this `prune` (like
+`StampLedger::prune`) never removes one before its prune margin has passed. The service must limit challenge lifetimes, rate and capacity.
 Database backups/WAL retention are operational policy, not a library guarantee.
 
 Losing nonce state rejects all outstanding challenges. Losing or rolling back

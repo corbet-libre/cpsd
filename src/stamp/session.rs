@@ -170,7 +170,8 @@ pub async fn issue_stamp_once<R: RngCore + CryptoRng, S: StampIssuanceStore>(
 
 /// One community's one-use record of stamped actions, over the community's
 /// own [`ChallengeStore`]: the key is the action digest, the binding is the
-/// community and action kind, the record lives until the stamp's expiry.
+/// community and action kind, the record lives until the stamp's expiry plus
+/// [`STAMP_PRUNE_MARGIN_SECONDS`].
 ///
 /// The same digest is the same action by the same member, so replicas that
 /// record it converge; a second presentation of a recorded digest is refused
@@ -242,6 +243,12 @@ impl<S: ChallengeStore> StampLedger<S> {
     /// recorded is refused with [`Error::StampReplayed`]; an expired stamp with
     /// [`Error::StampExpired`]; a stamp of another community with
     /// [`Error::InvalidStamp`].
+    ///
+    /// The record is stored with the deadline `X + `[`STAMP_PRUNE_MARGIN_SECONDS`],
+    /// not `X`: the store's own `prune` (also the verifier's `Verifier::prune`
+    /// on the shared community store) deletes everything past its deadline, so
+    /// the margin lives in the record itself and no pruning path can remove it
+    /// early. Every live check keeps comparing with `X`.
     pub async fn record(&self, stamp: &VerifiedStamp, now: Timestamp) -> Result<(), Error> {
         check_timestamp(now)?;
         ensure(
@@ -252,39 +259,57 @@ impl<S: ChallengeStore> StampLedger<S> {
         let record = ChallengeRecord {
             nonce: stamp.digest.to_bytes(),
             binding: one_use_binding(stamp),
-            expires: stamp.expires,
+            expires: retention_deadline(stamp.expires)?,
         };
         ensure(self.store.reserve(record).await?, Error::StampReplayed)
     }
 
     /// Whether this exact stamped action is recorded and its stamp unexpired.
+    /// Past the stamp's expiry `X` the answer is false even while the record
+    /// still exists for the prune margin.
     pub async fn recorded(&self, stamp: &VerifiedStamp, now: Timestamp) -> Result<bool, Error> {
+        if now > stamp.expires {
+            return Ok(false);
+        }
         self.store
             .matches(stamp.digest.to_bytes(), one_use_binding(stamp), now)
             .await
     }
 
     /// Removes the record of an action that was NOT applied, so the member can
-    /// retry with the same stamp. Never call it for an applied action.
+    /// retry with the same stamp. Never call it for an applied action. Nothing
+    /// is removed once the stamp's expiry `X` has passed.
     pub async fn release(&self, stamp: &VerifiedStamp, now: Timestamp) -> Result<bool, Error> {
+        if now > stamp.expires {
+            return Ok(false);
+        }
         self.store
             .consume(stamp.digest.to_bytes(), one_use_binding(stamp), now)
             .await
     }
 
-    /// Deletes records whose stamps expired more than
+    /// Deletes the records whose stamps expired more than
     /// [`STAMP_PRUNE_MARGIN_SECONDS`] before `now`. The margin keeps a record
     /// alive while a node with a clock up to that far behind (or a clock that
-    /// stepped back) could still accept its stamp; pruning at `now` itself
-    /// would let such a node apply the same action again. The underlying
-    /// store prunes all of its expired records with the same margin.
+    /// stepped back) could still accept its stamp; deleting at `X` itself would
+    /// let such a node apply the same action again. The margin is part of the
+    /// stored deadline ([`record`](Self::record)), so this is the store's plain
+    /// `prune(now)` and any other pruning of the same store, such as
+    /// `Verifier::prune`, keeps the same margin.
     pub async fn prune(&self, now: Timestamp) -> Result<u64, Error> {
         check_timestamp(now)?;
-        match now.checked_sub(STAMP_PRUNE_MARGIN_SECONDS) {
-            Some(cutoff) if cutoff > 0 => self.store.prune(cutoff).await,
-            _ => Ok(0),
-        }
+        self.store.prune(now).await
     }
+}
+
+/// The stored deadline of a one-use record: the stamp's expiry plus the prune
+/// margin. Refuses a deadline beyond the timestamp range.
+fn retention_deadline(expires: Timestamp) -> Result<Timestamp, Error> {
+    let deadline = expires
+        .checked_add(STAMP_PRUNE_MARGIN_SECONDS)
+        .ok_or(Error::InvalidTimestamp)?;
+    check_timestamp(deadline)?;
+    Ok(deadline)
 }
 
 fn one_use_binding(stamp: &VerifiedStamp) -> [u8; 32] {

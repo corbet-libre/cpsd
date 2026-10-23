@@ -148,6 +148,74 @@ fn valid_cose_cannot_extend_a_presentation_deadline() {
     );
 }
 
+/// X2 M3: in the independent-expiry profile the deadline is also the lower
+/// bound of the hidden expiry ranges. A community that signs a deadline far in
+/// the future would turn the holder's accept or refuse answer into a range
+/// oracle for the hidden expiries; the holder refuses it before it looks at the
+/// passport.
+#[test]
+fn independent_profile_refuses_a_deadline_beyond_the_ahead_bound() {
+    let mut rng = rng();
+    let (_, passport, _) = fixture(&mut rng);
+    let wallet_now = 1_000;
+    let mut signer = crate::test_support::signer(42);
+    let anchor =
+        AuthenticatedCommunity::from_authenticated_origin(community(), signer.key_ring().clone());
+    let ask = |rng: &mut StdRng, signer: &mut csgn::Signer, deadline: Timestamp| {
+        let request = PresentationRequest::new(rng, community(), 7, [gate()], deadline).unwrap();
+        crate::test_support::signed(signer, &request)
+    };
+    // The probe: the passport's validity ends at 2000 and its gate at 1500.
+    // Without the bound, deadlines 1501 and 2001 would be answered with
+    // "present" or "expired" and bracket the hidden values.
+    for deadline in [
+        wallet_now + MAX_REQUEST_AHEAD_SECONDS + 1,
+        1_501,
+        2_001,
+        1_000_000,
+    ] {
+        let cose = ask(&mut rng, &mut signer, deadline);
+        assert_eq!(
+            anchor.authenticate(&cose, wallet_now).err(),
+            Some(Error::InvalidPresentationRequest),
+            "deadline {deadline}"
+        );
+        assert_eq!(
+            passport.present(&mut rng, &anchor, &cose, wallet_now).err(),
+            Some(Error::InvalidPresentationRequest),
+            "deadline {deadline}"
+        );
+    }
+    // The bound itself and everything below it is still answered.
+    for deadline in [wallet_now, wallet_now + MAX_REQUEST_AHEAD_SECONDS] {
+        let cose = ask(&mut rng, &mut signer, deadline);
+        assert_eq!(
+            anchor.authenticate(&cose, wallet_now).unwrap().now(),
+            deadline
+        );
+        passport
+            .present(&mut rng, &anchor, &cose, wallet_now)
+            .unwrap();
+    }
+}
+
+/// The shared-epoch profile reveals the expiry exactly, so a later deadline
+/// teaches the community nothing and stays accepted.
+#[test]
+fn shared_epoch_profile_keeps_deadlines_beyond_the_ahead_bound() {
+    let mut rng = rng();
+    let mut signer = crate::test_support::signer(42);
+    let anchor =
+        AuthenticatedCommunity::from_authenticated_origin(community(), signer.key_ring().clone());
+    let wallet_now = 1_000;
+    let deadline = wallet_now + 10 * MAX_REQUEST_AHEAD_SECONDS;
+    let request =
+        PresentationRequest::for_epoch(&mut rng, community(), 7, [gate()], deadline, 5_000)
+            .unwrap();
+    let cose = crate::test_support::signed(&mut signer, &request);
+    assert_eq!(anchor.authenticate(&cose, wallet_now).unwrap(), request);
+}
+
 #[test]
 fn sealed_transport_requires_a_complete_authentication_tag() {
     for length in [0, 1, 15] {

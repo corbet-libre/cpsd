@@ -168,10 +168,13 @@ fn stamp_state_survives_a_restart_and_never_repeats_the_secret() {
         Some(request.to_bytes())
     );
     assert_eq!(restored.pending_stamp_request(&[approval(2)]), None);
-    assert_eq!(restored.pending_stamp_request(&[approval(1), approval(2)]), None);
+    assert_eq!(
+        restored.pending_stamp_request(&[approval(1), approval(2)]),
+        None
+    );
     assert_eq!(restored.pending_stamp_request(&[]), None);
     let blind = key.issue_blind(&mut rng, &request, &nonce, 1, now).unwrap();
-    restored.finish_stamp(&blind, now).unwrap();
+    restored.finish_stamp(&blind, 1, now).unwrap();
     assert_eq!(restored.pending_stamp_key(), None);
     assert_eq!(restored.pending_stamp_request(&[approval(1)]), None);
     let second = IssuanceChallenge::generate(&mut rng);
@@ -236,7 +239,7 @@ fn authenticated_foreign_or_empty_stamp_state_is_refused() {
         .begin_stamp(&mut rng, key.public_key(), &nonce, &[approval(1)], now)
         .unwrap();
     let blind = key.issue_blind(&mut rng, &request, &nonce, 1, now).unwrap();
-    foreign.finish_stamp(&blind, now).unwrap();
+    foreign.finish_stamp(&blind, 1, now).unwrap();
     let with_stamps = |stamps: &[u8], root: &[u8]| {
         let mut writer = Writer::new(Kind::OpaqueHolderWithStamps);
         writer.bytes(&original.secret.to_bytes());

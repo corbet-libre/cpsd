@@ -40,10 +40,11 @@ impl StampState {
         &mut self,
         secret: &HolderSecret,
         blind: &BlindStamp,
+        expected_epoch: u64,
         now: Timestamp,
     ) -> Result<(), Error> {
         let pending = self.pending.take().ok_or(Error::NoPendingIssuance)?;
-        let stamp = pending.finish(secret, blind, now)?;
+        let stamp = pending.finish(secret, blind, expected_epoch, now)?;
         self.stamps.retain(|held| now < held.expires);
         if self.stamps.len() >= MAX_HELD_STAMPS {
             // Non-empty here, so the first-expiring index always exists.

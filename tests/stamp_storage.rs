@@ -212,7 +212,9 @@ async fn missing_stamp_registry_fails_closed_and_keeps_the_nonce() {
     .await
     .unwrap();
     store.check_stamp_issuance_indexes().await.unwrap();
-    holder.finish_stamp(&once!().await.unwrap(), NOW).unwrap();
+    holder
+        .finish_stamp(&once!().await.unwrap(), EPOCH, NOW)
+        .unwrap();
     assert!(holder.stamp_covers(&approval(1).0, &approval(1).1, NOW));
     assert_eq!(once!().await.err(), Some(Error::InvalidChallenge));
 }
@@ -250,7 +252,7 @@ fn presented(seed: u64) -> Presented {
     let blind = key
         .issue_blind(&mut rng, &request, &nonce, EPOCH, NOW)
         .unwrap();
-    holder.finish_stamp(&blind, NOW).unwrap();
+    holder.finish_stamp(&blind, EPOCH, NOW).unwrap();
     let presentation = holder
         .present_stamp(&mut rng, &scope, &action, NOW)
         .unwrap();
@@ -317,6 +319,54 @@ async fn ledger_refuses_replays_across_pools_and_after_reopen() {
     );
     assert_eq!(
         reopened
+            .prune(EXPIRES + STAMP_PRUNE_MARGIN_SECONDS + 1)
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+/// X2 M2 on libSQL: `Verifier::prune` of the shared community table keeps the
+/// stamp prune margin, so a lagging node still refuses the replay.
+#[tokio::test]
+async fn verifier_prune_keeps_the_stamp_margin_in_the_shared_libsql_table() {
+    let p = presented(36);
+    let migrations = [Migration::new(1, "community challenges", SCHEMA)];
+    let (_dir, db, _url) = database(&migrations).await;
+    let ledger = StampLedger::new(
+        LibsqlStore::new(&db, scope("community"), 10).unwrap(),
+        *p.scope.fingerprint(),
+        vec![p.key.clone()],
+        params(),
+    )
+    .unwrap();
+    let verifier = Verifier::new(
+        LibsqlStore::new(&db, scope("community"), 10).unwrap(),
+        vec![],
+    )
+    .unwrap();
+    let verified = ledger
+        .accept(&p.action, &p.presentation, EPOCH, NOW)
+        .await
+        .unwrap();
+    assert_eq!(verifier.prune(EXPIRES + 1).await.unwrap(), 0);
+    assert_eq!(
+        ledger
+            .accept(&p.action, &p.presentation, EPOCH, EXPIRES - 1)
+            .await
+            .err(),
+        Some(Error::StampReplayed)
+    );
+    assert!(ledger.recorded(&verified, EXPIRES - 1).await.unwrap());
+    assert_eq!(
+        verifier
+            .prune(EXPIRES + STAMP_PRUNE_MARGIN_SECONDS)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        verifier
             .prune(EXPIRES + STAMP_PRUNE_MARGIN_SECONDS + 1)
             .await
             .unwrap(),

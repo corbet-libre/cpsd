@@ -407,17 +407,27 @@ pub(crate) struct PendingStamp {
 
 impl PendingStamp {
     /// Unblinds the wallet's answer and checks the signature over `secret`,
-    /// the slots and the signed attributes, and that the expiry lies on the
-    /// key's cohort grid inside the issuance window from the request to `now`
+    /// the slots and the signed attributes, that the signed epoch is
+    /// `expected_epoch`, and that the expiry lies on the key's cohort grid
+    /// inside the issuance window from the request to `now`
     /// ([`StampPublicKey::check_signed_expiry`]). Returns the stamp.
+    ///
+    /// The epoch is revealed by every presentation, so a wallet that signed a
+    /// different epoch per member would tag the member for a colluding
+    /// community. `expected_epoch` therefore comes from the authenticated
+    /// global publication, never from the wallet's answer.
     pub(crate) fn finish(
         self,
         secret: &HolderSecret,
         blind: &BlindStamp,
+        expected_epoch: u64,
         now: Timestamp,
     ) -> Result<Stamp, Error> {
         if blind.key_id != *self.issuer.key_id() {
             return Err(Error::KeyMismatch);
+        }
+        if blind.epoch != expected_epoch {
+            return Err(Error::WrongEpoch);
         }
         self.issuer
             .check_signed_expiry(blind.expires, self.begun, now)?;

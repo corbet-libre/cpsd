@@ -1220,3 +1220,39 @@ fn root_key_must_be_distinct_from_unselected_global_ring_entries() {
     verify_root_board_issuance(&ring, &context, &issuance, NOW).unwrap();
     verify_root_board(&ring, &request, &proof, NOW).unwrap();
 }
+
+/// X2 M3 for the root board: the global request inside a root-board request may
+/// use the independent-expiry profile, so its deadline obeys the same ahead
+/// bound as an ordinary request.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[test]
+fn independent_global_request_beyond_the_ahead_bound_is_refused() {
+    let mut w = world();
+    for (deadline, accepted) in [
+        (NOW, true),
+        (NOW + MAX_REQUEST_AHEAD_SECONDS, true),
+        (NOW + MAX_REQUEST_AHEAD_SECONDS + 1, false),
+        (NOW + 100_000, false),
+    ] {
+        let global = PresentationRequest::new(
+            &mut w.rng,
+            w.root_community.clone(),
+            7,
+            [w.phone.clone()],
+            deadline,
+        )
+        .unwrap();
+        let request = RootBoardRequest::new(global, w.descriptor.clone()).unwrap();
+        let signed = sign(&mut w.signer, &request.to_bytes(), request.deadline());
+        let outcome = w.expected.authenticate_root_board_request(&signed, NOW);
+        if accepted {
+            assert!(outcome.is_ok(), "deadline {deadline}");
+        } else {
+            assert_eq!(
+                outcome.err(),
+                Some(Error::InvalidPresentationRequest),
+                "deadline {deadline}"
+            );
+        }
+    }
+}

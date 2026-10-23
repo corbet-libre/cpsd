@@ -154,13 +154,16 @@ pseudonym, never a caller-supplied one.
 ### 2.7 One use
 
 `StampLedger` stores `(nonce = digest, binding = H(community ‖ kind),
-expires = X)` with `ChallengeStore::reserve`, which inserts only if the key
-is absent. A digest already present is refused as a replay. The stamp is
-invalid from `X` on. `prune(now)` deletes only records with
-`X < now − 1 h` (`STAMP_PRUNE_MARGIN_SECONDS`): a node that shares the
+expires = X + 1 h)` with `ChallengeStore::reserve`, which inserts only if the
+key is absent. A digest already present is refused as a replay. The stamp is
+invalid from `X` on; every live check compares with `X`. The margin
+(`STAMP_PRUNE_MARGIN_SECONDS`) is part of the stored deadline, so any `prune`
+of the shared community store, `StampLedger::prune` and `Verifier::prune`
+alike, deletes a record only when `now > X + 1 h`: a node that shares the
 ledger with a clock up to one hour behind, or whose clock stepped back, still
 finds the record while it could accept the stamp. `release`
-(compare-and-delete) exists only for an action that was not applied.
+(compare-and-delete) exists only for an action that was not applied and
+removes nothing once `X` has passed.
 
 ## 3. Threat model
 
@@ -331,14 +334,25 @@ and the tag registry change together or not at all.
   index would need an OR proof over sixteen slots, which is not implemented.
 - **Key-ID tagging.** A wallet could publish one key per member. Verifiers
   accept only keys in the authenticated ring, so this is visible there.
+- **Epoch tagging.** Every presentation reveals the signed epoch, and the
+  wallet chooses what it signs. `OpaqueHolder::finish_stamp` therefore takes
+  the expected epoch from the caller and refuses any other signed epoch with
+  `Error::WrongEpoch`, before it unblinds. The caller passes the epoch of the
+  authenticated global publication (the signed global status, identical for
+  every member and the value verifiers pass to `verify_stamp`), never a value
+  from the wallet's reply. A wallet that signs another epoch gets no stamp
+  installed. The residual matches key-ID tagging: a wallet that also signs and
+  serves one member a per-member status is caught only by parties that compare
+  it with the real publication.
 - **Replicas.** Two replicas that each accept a digest before they sync could
   both apply it. The design makes the same digest the same action, so action
   handlers must be idempotent per digest.
 - **`release` misuse.** Releasing the record of an applied action re-enables
   a replay until `X`.
-- **Clock skew and pruning.** Records outlive their stamps by one hour. Nodes
-  that share a ledger must keep their clocks within that margin of each
-  other; a larger skew could re-accept a pruned digest.
+- **Clock skew and pruning.** Records outlive their stamps by one hour,
+  whatever prunes the shared store (the margin is in the stored deadline,
+  section 2.7). Nodes that share a ledger must keep their clocks within that
+  margin of each other; a larger skew could re-accept a pruned digest.
 - **Capacity.** One-use records share the community's `ChallengeStore`
   capacity with login challenges and live up to `2·P + 1 h`. Size the
   capacity for both (README); a full store refuses new login challenges with

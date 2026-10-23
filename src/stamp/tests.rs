@@ -110,7 +110,7 @@ fn issue(
     let blind = BlindStamp::from_bytes(&blind.to_bytes()).unwrap();
     assert_eq!((blind.epoch(), blind.expires()), (EPOCH, EXPIRES));
     assert_eq!(blind.key_id(), key.public_key().key_id());
-    let stamp = pending.finish(secret, &blind, NOW).unwrap();
+    let stamp = pending.finish(secret, &blind, EPOCH, NOW).unwrap();
     Held {
         secret: secret.clone(),
         stamp: Stamp::from_bytes(&stamp.to_bytes(), secret).unwrap(),
@@ -700,7 +700,7 @@ fn unblinding_checks_key_window_and_signature() {
     assert!(format!("{blind:?}").contains("BlindStamp"));
     assert!(format!("{:?}", pending().1).contains("PendingStamp"));
     assert_eq!(pending().1.issuer(), key.public_key());
-    let finish = |blind: &BlindStamp, now| pending().1.finish(&secret, blind, now).err();
+    let finish = |blind: &BlindStamp, now| pending().1.finish(&secret, blind, EPOCH, now).err();
     let mut wrong = blind.clone();
     wrong.key_id = KeyId::new("other").unwrap();
     assert_eq!(finish(&wrong, NOW), Some(Error::KeyMismatch));
@@ -734,29 +734,50 @@ fn unblinding_checks_key_window_and_signature() {
         .issue_blind(&mut rng, &request, &nonce, EPOCH, boundary)
         .unwrap();
     assert_eq!(blind_near.expires(), skewed);
-    pending_near.finish(&secret, &blind_near, near).unwrap();
+    pending_near
+        .finish(&secret, &blind_near, EPOCH, near)
+        .unwrap();
     let (request, pending_far) =
         request_stamp(&mut rng, &secret, key.public_key(), &nonce, &d, near - 1).unwrap();
     let blind_far = key
         .issue_blind(&mut rng, &request, &nonce, EPOCH, boundary)
         .unwrap();
     assert_eq!(
-        pending_far.finish(&secret, &blind_far, near - 1).err(),
+        pending_far
+            .finish(&secret, &blind_far, EPOCH, near - 1)
+            .err(),
         Some(Error::InvalidStamp)
     );
+    // X2 M1: the signed epoch must be the one the holder expects from the
+    // authenticated publication, before anything else about the answer counts.
     let mut epoch = blind.clone();
     epoch.epoch += 1;
-    assert_eq!(finish(&epoch, NOW), Some(Error::InvalidSignature));
+    assert_eq!(finish(&epoch, NOW), Some(Error::WrongEpoch));
+    assert_eq!(
+        finish(
+            &BlindStamp {
+                epoch: 0,
+                ..blind.clone()
+            },
+            NOW
+        ),
+        Some(Error::WrongEpoch)
+    );
+    // Even when the holder expected that epoch, the signature still covers it.
+    assert_eq!(
+        pending().1.finish(&secret, &epoch, EPOCH + 1, NOW).err(),
+        Some(Error::InvalidSignature)
+    );
     // An answer that arrives after the stamp expired is useless and refused.
     assert_eq!(finish(&blind, EXPIRES), Some(Error::StampExpired));
     assert_eq!(finish(&blind, 0), Some(Error::InvalidTimestamp));
     // Another secret never unblinds into a valid stamp.
     let other = HolderSecret::generate(&mut rng);
     assert_eq!(
-        pending().1.finish(&other, &blind, NOW).err(),
+        pending().1.finish(&other, &blind, EPOCH, NOW).err(),
         Some(Error::InvalidSignature)
     );
-    let stamp = pending().1.finish(&secret, &blind, NOW).unwrap();
+    let stamp = pending().1.finish(&secret, &blind, EPOCH, NOW).unwrap();
     assert!(format!("{stamp:?}").contains("Stamp"));
     assert!(!format!("{stamp:?}").contains("secret"));
     assert_eq!(
@@ -974,7 +995,7 @@ fn every_stamp_encoding_is_strict() {
         .issue_blind(&mut rng, &request, &nonce, EPOCH, NOW)
         .unwrap();
     let pending_bytes = pending.to_bytes();
-    let stamp = pending.finish(&secret, &blind, NOW).unwrap();
+    let stamp = pending.finish(&secret, &blind, EPOCH, NOW).unwrap();
     let presentation = stamp.present(&mut rng, &secret, &s, &a).unwrap();
     let mut state = StampState {
         pending: Some(PendingStamp::from_bytes(&pending_bytes).unwrap()),
@@ -1268,7 +1289,7 @@ async fn wallet_issuance_binds_member_tag_confirmation_and_single_use_nonce() {
     );
     // Refusals consumed nothing; success consumes the nonce once.
     let blind = once(request.clone(), ok.clone(), 90).await.unwrap();
-    pending.finish(&secret, &blind, 90).unwrap();
+    pending.finish(&secret, &blind, EPOCH, 90).unwrap();
     assert_eq!(
         once(request.clone(), ok.clone(), 90).await.err(),
         Some(Error::InvalidChallenge)
@@ -1495,6 +1516,91 @@ async fn ledger_records_each_digest_once_until_the_cohort_ends() {
     assert_eq!(ledger.prune(0).await.err(), Some(Error::InvalidTimestamp));
 }
 
+/// X2 M2: the ledger shares the community's challenge store with login
+/// challenges, and the service prunes that store through `Verifier::prune`. The
+/// prune margin lives in the stored deadline, so no pruning path of the store
+/// can delete a one-use record before `X + STAMP_PRUNE_MARGIN_SECONDS`.
+#[tokio::test]
+async fn verifier_prune_of_the_shared_store_keeps_the_stamp_prune_margin() {
+    let mut rng = StdRng::seed_from_u64(15);
+    let key = key(&mut rng, "stamp-m2");
+    let secret = HolderSecret::generate(&mut rng);
+    let covered = covered(&mut rng, 1);
+    let stamp = issue(&mut rng, &key, &secret, &covered);
+    let (scope, act) = &covered[0];
+    let store = MemoryStore::new(scope.community().clone(), 10).unwrap();
+    let ledger = StampLedger::new(
+        store.clone(),
+        *scope.fingerprint(),
+        vec![key.public_key().clone()],
+        params(),
+    )
+    .unwrap();
+    let verifier = Verifier::new(store.clone(), Vec::new()).unwrap();
+    // A login challenge in the same store, long past its deadline.
+    assert!(
+        store
+            .reserve(ChallengeRecord {
+                nonce: [9; 32],
+                binding: [8; 32],
+                expires: EXPIRES - 100,
+            })
+            .await
+            .unwrap()
+    );
+    let first = roundtrip(&stamp.present(&mut rng, scope, act).unwrap());
+    let verified = ledger.accept(act, &first, EPOCH, NOW).await.unwrap();
+
+    // The service prunes at X + 1: the login challenge goes, the stamp record
+    // stays.
+    assert_eq!(verifier.prune(EXPIRES + 1).await.unwrap(), 1);
+    // A node whose clock lags (or stepped back) still sees `now < X`: the same
+    // action cannot be applied a second time.
+    let again = stamp.present(&mut rng, scope, act).unwrap();
+    assert_eq!(
+        ledger.accept(act, &again, EPOCH, EXPIRES - 1).await.err(),
+        Some(Error::StampReplayed)
+    );
+    assert_eq!(
+        ledger.record(&verified, EXPIRES - 1).await.err(),
+        Some(Error::StampReplayed)
+    );
+    // Not before the margin has passed, at the verifier or the ledger.
+    assert_eq!(
+        verifier
+            .prune(EXPIRES + STAMP_PRUNE_MARGIN_SECONDS)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        ledger
+            .prune(EXPIRES + STAMP_PRUNE_MARGIN_SECONDS)
+            .await
+            .unwrap(),
+        0
+    );
+    // `recorded` answers for the live stamp only, whatever the store holds.
+    assert!(ledger.recorded(&verified, EXPIRES - 1).await.unwrap());
+    assert!(!ledger.recorded(&verified, EXPIRES + 1).await.unwrap());
+    assert!(!ledger.release(&verified, EXPIRES + 1).await.unwrap());
+    assert_eq!(
+        verifier
+            .prune(EXPIRES + STAMP_PRUNE_MARGIN_SECONDS + 1)
+            .await
+            .unwrap(),
+        1
+    );
+    // The record is gone only when every such node refuses the stamp as expired.
+    assert_eq!(
+        ledger
+            .accept(act, &again, EPOCH, EXPIRES + STAMP_PRUNE_MARGIN_SECONDS + 1)
+            .await
+            .err(),
+        Some(Error::StampExpired)
+    );
+}
+
 #[test]
 fn new_errors_and_issuer_tags_have_stable_text_and_validation() {
     for (error, text) in [
@@ -1557,7 +1663,7 @@ fn pending_stamp_stamp_and_state_encodings_carry_no_secret_bytes() {
         let blind = key
             .issue_blind(&mut rng, &request, &nonce, EPOCH, NOW)
             .unwrap();
-        let stamp = pending.finish(&secret, &blind, NOW).unwrap();
+        let stamp = pending.finish(&secret, &blind, EPOCH, NOW).unwrap();
         let (_, second) =
             request_stamp(&mut rng, &secret, key.public_key(), &nonce, &digests, NOW).unwrap();
         let mut state = StampState {

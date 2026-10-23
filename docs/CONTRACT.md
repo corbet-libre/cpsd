@@ -63,7 +63,11 @@ state. They must never be treated as replay prevention by themselves.
 The holder accepts only COSE bytes verified through the expected community's
 origin-authenticated csgn key ring (`AuthenticatedCommunity`). The COSE kind is
 Credential, the payload is exactly a canonical cpsd PresentationRequest, and
-its exclusive expiry equals the inclusive challenge deadline plus one. The
+its exclusive expiry equals the inclusive challenge deadline plus one. In the
+independent-expiry profile the deadline may lie at most
+`MAX_REQUEST_AHEAD_SECONDS` (300 s, the stamp clock skew) after the wallet's
+time: the deadline is also the lower bound of the hidden expiry ranges, and a
+far-future deadline would make the holder's answer a range oracle for them. The
 expected community must equal the signed scope. Authentication, time and scope
 checks precede all proof generation. The caller supplies trusted wallet time;
 service verification still enforces authoritative time and epoch.

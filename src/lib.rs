@@ -58,7 +58,9 @@ mod tests;
 pub use ark_std::rand;
 
 pub use attributes::{MAX_GATES, PassportAttributes, TIME_LIMIT, Timestamp};
-pub use authentication::{AuthenticatedCommunity, AuthenticatedIssuance};
+pub use authentication::{
+    AuthenticatedCommunity, AuthenticatedIssuance, MAX_REQUEST_AHEAD_SECONDS,
+};
 pub use error::Error;
 pub use holder::{HolderSecret, Passport, PendingIssuance, request_issue};
 pub use ids::{CommunityId, GateId, KeyId, MAX_COMMUNITY_ID_LEN, MAX_ID_LEN};

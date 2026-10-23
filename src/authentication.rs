@@ -5,6 +5,20 @@ use crate::{
     attributes::check_timestamp,
 };
 
+/// How far ahead of the wallet's own clock an independent-expiry request's
+/// deadline (`request.now()`) may lie, in seconds. Equal to the stamp clock
+/// skew ([`crate::STAMP_CLOCK_SKEW_SECONDS`]).
+///
+/// In the independent-expiry profile the deadline is also the lower bound of
+/// the hidden expiry ranges, and the holder refuses without answering when its
+/// passport or a requested gate expires before it. A community that signs
+/// deadlines far in the future could therefore binary-search a hidden expiry
+/// from the holder's accept or refuse answers. With this bound the answer says
+/// only that an expiry lies within the next five minutes, which passes
+/// anyway. The bound is a constant of this crate, independent of the
+/// community's key ring and its `max_validity`.
+pub const MAX_REQUEST_AHEAD_SECONDS: u64 = 5 * 60;
+
 /// Wallet trust anchor pinned to the initiating origin by authenticated discovery.
 ///
 /// The caller must authenticate BOTH the community ID and its csgn key ring.
@@ -27,6 +41,8 @@ impl AuthenticatedCommunity {
     /// authorization from other credentials; other csgn kinds are rejected.
     /// Sign with an exclusive COSE expiry equal to `request.now() + 1`, so the
     /// inclusive challenge deadline remains usable. No dates are persisted here.
+    /// An independent-expiry request whose deadline lies more than
+    /// [`MAX_REQUEST_AHEAD_SECONDS`] after `now` is refused.
     pub fn authenticate(&self, cose: &[u8], now: Timestamp) -> Result<PresentationRequest, Error> {
         let (payload, valid_until) = self.verified_payload(cose, now)?;
         let request = PresentationRequest::from_bytes(&payload)
@@ -37,6 +53,7 @@ impl AuthenticatedCommunity {
         {
             return Err(Error::InvalidPresentationRequest);
         }
+        check_deadline_ahead(&request, now)?;
         Ok(request)
     }
 
@@ -91,6 +108,7 @@ impl AuthenticatedCommunity {
         {
             return Err(Error::InvalidPresentationRequest);
         }
+        check_deadline_ahead(&request, now)?;
         Ok(request)
     }
 
@@ -111,6 +129,7 @@ impl AuthenticatedCommunity {
         {
             return Err(Error::InvalidPresentationRequest);
         }
+        check_deadline_ahead(request.global_request(), now)?;
         Ok(request)
     }
 
@@ -125,6 +144,18 @@ impl AuthenticatedCommunity {
             .map_err(|_| Error::InvalidPresentationRequest)?;
         Ok((verified.payload().to_vec(), verified.valid_until()))
     }
+}
+
+/// Refuses an independent-expiry request whose deadline lies more than
+/// [`MAX_REQUEST_AHEAD_SECONDS`] after the wallet's `now`. The shared-epoch
+/// profile reveals the expiry exactly, so a deadline there teaches nothing.
+fn check_deadline_ahead(request: &PresentationRequest, now: Timestamp) -> Result<(), Error> {
+    if request.epoch_expiry().is_none()
+        && request.now() > now.saturating_add(MAX_REQUEST_AHEAD_SECONDS)
+    {
+        return Err(Error::InvalidPresentationRequest);
+    }
+    Ok(())
 }
 
 /// Opaque global person and session IDs obtained from successful authentication.

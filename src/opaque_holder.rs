@@ -262,13 +262,26 @@ impl OpaqueHolder {
     }
 
     /// Consume the pending stamp request and retain only a verified stamp
-    /// whose signed expiry fits the issuance window ending at `now`.
+    /// whose signed epoch is `expected_epoch` and whose signed expiry fits the
+    /// issuance window ending at `now`.
+    ///
+    /// `expected_epoch` is the stamp epoch of the authenticated global
+    /// publication (the signed global status the device verifies, identical for
+    /// every member; the epoch verifiers pass to [`crate::verify_stamp`]). Never
+    /// take it from the wallet's answer or reply: every presentation reveals the
+    /// epoch, so a wallet that chose it per member would tag the member for a
+    /// colluding community. Another signed epoch fails with [`Error::WrongEpoch`].
     ///
     /// Even an invalid answer consumes the attempt; retained stamps are kept.
     /// At most eight stamps are retained: a new one first drops expired ones,
     /// then the one that expires first.
-    pub fn finish_stamp(&mut self, blind: &BlindStamp, now: Timestamp) -> Result<(), Error> {
-        self.stamps.finish(&self.secret, blind, now)
+    pub fn finish_stamp(
+        &mut self,
+        blind: &BlindStamp,
+        expected_epoch: u64,
+        now: Timestamp,
+    ) -> Result<(), Error> {
+        self.stamps.finish(&self.secret, blind, expected_epoch, now)
     }
 
     /// Drop a pending stamp request without affecting retained stamps.
@@ -293,10 +306,7 @@ impl OpaqueHolder {
     /// without a second confirmation, and [`finish_stamp`](Self::finish_stamp)
     /// completes the kept request against the stamp key it was addressed to.
     /// `None` when nothing is pending or the request was made for other actions.
-    pub fn pending_stamp_request(
-        &self,
-        actions: &[(StampScope, StampAction)],
-    ) -> Option<Vec<u8>> {
+    pub fn pending_stamp_request(&self, actions: &[(StampScope, StampAction)]) -> Option<Vec<u8>> {
         let digests: Vec<StampDigest> = actions
             .iter()
             .map(|(scope, action)| {
