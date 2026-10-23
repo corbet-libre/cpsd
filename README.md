@@ -223,7 +223,7 @@ round trips, and the Wasm target check. Tests exercise hostile holders bypassing
 client checks, transcript changes, wrong keys, renewal, malformed encodings,
 expiry boundaries and pseudonym distribution. Performance tests print measured
 operation durations and proof size; native timings do not establish browser
-performance. Cargo is never run on the workstation.
+performance.
 
 The implemented contract is in [docs/CONTRACT.md](docs/CONTRACT.md).
 
