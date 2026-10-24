@@ -264,13 +264,12 @@ impl<S: ChallengeStore> StampLedger<S> {
         ensure(self.store.reserve(record).await?, Error::StampReplayed)
     }
 
-    /// Whether this exact stamped action is recorded and its stamp unexpired.
-    /// Past the stamp's expiry `X` the answer is false even while the record
-    /// still exists for the prune margin.
+    /// Whether this exact stamped action is recorded. The answer comes from
+    /// the stored record for as long as the store retains it: at least until
+    /// the stamp's expiry `X` plus [`STAMP_PRUNE_MARGIN_SECONDS`], or longer on
+    /// a store that retains records longer. Past `X` it only recognises the
+    /// same recorded action again; it grants no new use.
     pub async fn recorded(&self, stamp: &VerifiedStamp, now: Timestamp) -> Result<bool, Error> {
-        if now > stamp.expires {
-            return Ok(false);
-        }
         self.store
             .matches(stamp.digest.to_bytes(), one_use_binding(stamp), now)
             .await

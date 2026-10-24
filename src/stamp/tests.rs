@@ -1499,6 +1499,21 @@ async fn ledger_records_each_digest_once_until_the_cohort_ends() {
         0
     );
     assert!(ledger.recorded(&verified, EXPIRES).await.unwrap());
+    // Past X the record is still recognised, through the margin; release frees nothing.
+    assert!(ledger.recorded(&verified, EXPIRES + 1).await.unwrap());
+    assert!(
+        ledger
+            .recorded(&verified, EXPIRES + STAMP_PRUNE_MARGIN_SECONDS)
+            .await
+            .unwrap()
+    );
+    assert!(!ledger.release(&verified, EXPIRES + 1).await.unwrap());
+    assert!(
+        !ledger
+            .recorded(&verified, EXPIRES + STAMP_PRUNE_MARGIN_SECONDS + 1)
+            .await
+            .unwrap()
+    );
     assert_eq!(
         ledger.accept(act, &fresh, EPOCH, EXPIRES).await.err(),
         Some(Error::StampExpired)
@@ -1778,4 +1793,73 @@ fn stamp_and_passport_prove_the_same_pseudonym() {
         .unwrap();
         assert_eq!(from_stamp.pseudonym(), &from_passport);
     }
+}
+
+/// A store that keeps every record `extra` seconds longer than its deadline, as a
+/// community that must recognise a retried action after its stamp expired does.
+#[derive(Clone)]
+struct RetainingStore {
+    inner: MemoryStore,
+    extra: u64,
+}
+
+impl ChallengeStore for RetainingStore {
+    fn community(&self) -> &CommunityId {
+        self.inner.community()
+    }
+    async fn reserve(&self, mut record: ChallengeRecord) -> Result<bool, Error> {
+        record.expires += self.extra;
+        self.inner.reserve(record).await
+    }
+    async fn matches(
+        &self,
+        nonce: [u8; 32],
+        binding: [u8; 32],
+        now: Timestamp,
+    ) -> Result<bool, Error> {
+        self.inner.matches(nonce, binding, now).await
+    }
+    async fn consume(
+        &self,
+        nonce: [u8; 32],
+        binding: [u8; 32],
+        now: Timestamp,
+    ) -> Result<bool, Error> {
+        self.inner.consume(nonce, binding, now).await
+    }
+    async fn prune(&self, now: Timestamp) -> Result<u64, Error> {
+        self.inner.prune(now).await
+    }
+}
+
+/// `recorded` answers from the stored record for as long as the store retains it,
+/// also past the stamp's expiry; `release` frees nothing after the expiry.
+#[tokio::test]
+async fn recorded_follows_the_retention_of_the_store_past_the_expiry() {
+    let mut rng = StdRng::seed_from_u64(15);
+    let key = key(&mut rng, "stamp-r");
+    let secret = HolderSecret::generate(&mut rng);
+    let covered = covered(&mut rng, 1);
+    let stamp = issue(&mut rng, &key, &secret, &covered);
+    let (scope, act) = &covered[0];
+    let extra = 5 * 86_400;
+    let store = RetainingStore {
+        inner: MemoryStore::new(scope.community().clone(), 10).unwrap(),
+        extra,
+    };
+    let ledger = StampLedger::new(
+        store,
+        *scope.fingerprint(),
+        vec![key.public_key().clone()],
+        params(),
+    )
+    .unwrap();
+    let p = roundtrip(&stamp.present(&mut rng, scope, act).unwrap());
+    let verified = ledger.accept(act, &p, EPOCH, NOW).await.unwrap();
+    let end = EXPIRES + STAMP_PRUNE_MARGIN_SECONDS + extra;
+    assert!(ledger.recorded(&verified, EXPIRES + 1).await.unwrap());
+    assert!(ledger.recorded(&verified, end).await.unwrap());
+    assert!(!ledger.release(&verified, EXPIRES + 1).await.unwrap());
+    assert!(ledger.recorded(&verified, EXPIRES + 1).await.unwrap());
+    assert!(!ledger.recorded(&verified, end + 1).await.unwrap());
 }
