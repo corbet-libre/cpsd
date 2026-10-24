@@ -1595,9 +1595,9 @@ async fn verifier_prune_of_the_shared_store_keeps_the_stamp_prune_margin() {
             .unwrap(),
         0
     );
-    // `recorded` answers for the live stamp only, whatever the store holds.
+    // `recorded` follows the stored record, through the margin; `release` frees nothing after X.
     assert!(ledger.recorded(&verified, EXPIRES - 1).await.unwrap());
-    assert!(!ledger.recorded(&verified, EXPIRES + 1).await.unwrap());
+    assert!(ledger.recorded(&verified, EXPIRES + 1).await.unwrap());
     assert!(!ledger.release(&verified, EXPIRES + 1).await.unwrap());
     assert_eq!(
         verifier
