@@ -19,8 +19,7 @@ cache = false
 cache_outputs = ["Cargo.lock", "fuzz/Cargo.lock"]
 
 [render]
-tool_revision = "bd9aff07073185fb0a3503bab331aedefb6d8fd2"
-tool_sha256 = "38c0eadf2a2adb406f83c7d4892bc01a0a10b95671e1e671358e43a257bb5d23"
+render_schema = 2
 [jobs.verify]
 scheduler = "forgejo"
 runs_on = "heavy"
