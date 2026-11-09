@@ -1,8 +1,7 @@
 //! Identical deterministic public proof vectors executed natively and in Chrome.
 
-mod common;
+use crate::common::TestPresentation;
 use blake2::{Blake2b512, Digest};
-use common::TestPresentation;
 use cpsd::*;
 use rand::{SeedableRng, rngs::StdRng};
 
