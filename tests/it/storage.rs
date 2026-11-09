@@ -2,8 +2,7 @@
 
 #![cfg(all(feature = "storage", not(target_arch = "wasm32")))]
 
-mod common;
-use common::TestPresentation;
+use crate::common::TestPresentation;
 
 use cpsd::{
     storage::libsql::{ISSUANCE_SCHEMA, ISSUANCE_UNIQUENESS_SCHEMA, LibsqlStore, SCHEMA},

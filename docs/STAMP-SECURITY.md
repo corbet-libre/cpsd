@@ -381,7 +381,7 @@ and the tag registry change together or not at all.
 | Custody: sealed stamp state, restart, foreign state | `src/opaque_holder/sealing/tests.rs` |
 | Public custody path end to end (opaque holder, wallet, ledger) | `tests/stamp_holder.rs` |
 | libSQL registry, shared-database separation, fail-closed schema, ledger across pools and reopen, concurrent replay | `tests/stamp_storage.rs` |
-| Deterministic known-answer vectors (native and browser) | `tests/stamp_vectors.rs` |
+| Deterministic known-answer vectors (native and browser) | `tests/it/stamp_vectors.rs` |
 | Passport vectors unchanged | `tests/proof_vectors.rs` (same receipts before and after) |
 | Decoder fuzzing | `fuzz/fuzz_targets/decode_encode.rs` |
 | Coverage | the repository gate (`docs/COVERAGE.md`), not lowered |

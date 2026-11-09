@@ -53,7 +53,7 @@ google-chrome --version
 echo 'stage: browser chrome vectors'
 # Chromium's singleton socket path must fit the Unix socket limit; keep the
 # browser profile under a short TMPDIR (profiles stay unique per run).
-TMPDIR=/tmp cargo test --release --locked --target wasm32-unknown-unknown --test browser --test opaque_holder --test boundaries --test stamp_vectors -- --nocapture 2>&1
+TMPDIR=/tmp cargo test --release --locked --target wasm32-unknown-unknown --test it -- --nocapture 2>&1
 
 # Dependency license inventory (ci.yml check job, always).
 cargo metadata --locked --format-version 1 > dependency-metadata.json

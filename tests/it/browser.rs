@@ -2,8 +2,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-mod common;
-use common::TestPresentation;
+use crate::common::TestPresentation;
 
 use cpsd::*;
 use rand::{
