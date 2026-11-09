@@ -554,7 +554,7 @@ dependencies = [
 [[package]]
 name = "crlt"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/crlt?branch=main#75c191b6fdb3448c91b338b2322059cbc0253c26"
+source = "git+https://git.corbet.ch/corbet-libre/crlt.git?branch=main#30b9b9f36aa1c74f84d7648ef7df8dcaa4b8c5b1"
 dependencies = [
  "deadpool",
  "libsql",
@@ -596,7 +596,7 @@ dependencies = [
 [[package]]
 name = "csgn"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/csgn?branch=main#2df86cef67d3e9540cb59f064a763912959ac01f"
+source = "git+https://git.corbet.ch/corbet-libre/csgn.git?branch=main#bb79c367b2878949d8ae6739fcc4709490212824"
 dependencies = [
  "ciborium-ll",
  "coset",
