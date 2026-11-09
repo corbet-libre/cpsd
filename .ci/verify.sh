@@ -30,7 +30,7 @@ cargo check --locked --target wasm32-unknown-unknown
 # google-chrome resolves to the pinned chromium via the runner compat shim.
 version="0.2.104"
 archive="wasm-bindgen-${version}-x86_64-unknown-linux-musl.tar.gz"
-base="https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${version}"
+base="${WASM_BINDGEN_DOWNLOAD_BASE:-https://github.com/wasm-bindgen/wasm-bindgen/releases/download}/${version}"
 runner_tmp="${RUNNER_TEMP}/cpsd-wasm-runner"
 mkdir -p "$runner_tmp"
 cd "$runner_tmp"
